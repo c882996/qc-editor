@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QC 標注編輯器</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'PingFang TC','Microsoft JhengHei',sans-serif;background:#1a1a1a;color:#e8e8e8;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+#toolbar{display:flex;align-items:center;gap:5px;padding:7px 10px;background:#242424;border-bottom:1px solid #333;flex-wrap:wrap;flex-shrink:0}
+.tool-btn{background:#2e2e2e;border:1px solid #444;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;color:#ccc;display:flex;align-items:center;gap:4px;transition:all 0.15s;white-space:nowrap}
+.tool-btn:hover{background:#3a3a3a;color:#fff}
+.tool-btn.active{background:#d94f2b;border-color:#e0603a;color:#fff}
+.sep{width:1px;height:22px;background:#444;margin:0 2px;flex-shrink:0}
+.lbl{font-size:11px;color:#888}
+input[type=range]{width:70px;accent-color:#d94f2b;cursor:pointer}
+input[type=color]{width:30px;height:28px;border:1px solid #444;border-radius:5px;cursor:pointer;padding:2px;background:#2e2e2e}
+input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid #444;border-radius:5px;padding:3px 4px;background:#2e2e2e;color:#e8e8e8}
+#main{display:flex;flex:1;overflow:hidden}
+#canvas-area{flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:flex-start;padding:16px;background:#111}
+#canvas-wrap{position:relative;display:none}
+#base-img{display:block;pointer-events:none;max-width:none}
+#draw-canvas{position:absolute;top:0;left:0;cursor:crosshair}
+#upload-zone{width:100%;max-width:600px;border:2px dashed #444;border-radius:12px;padding:60px 24px;text-align:center;cursor:pointer;color:#666;font-size:15px;transition:all 0.2s;margin:auto}
+#upload-zone:hover{border-color:#d94f2b;color:#ccc;background:rgba(217,79,43,0.05)}
+#upload-zone svg{display:block;margin:0 auto 12px;opacity:0.4}
+#side-panel{width:210px;background:#1e1e1e;border-left:1px solid #333;padding:14px;display:flex;flex-direction:column;gap:0;overflow-y:auto;flex-shrink:0}
+.section{border-bottom:1px solid #2e2e2e;padding-bottom:14px;margin-bottom:14px}
+.section:last-child{border-bottom:none}
+.s-title{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.frac-wrap{background:#2a2a2a;border-radius:8px;padding:10px;text-align:center}
+.frac-inp{width:100%;font-size:24px;font-weight:600;text-align:center;border:none;border-bottom:1px solid #444;background:transparent;color:#fff;padding:4px 0;outline:none}
+.frac-inp:focus{border-bottom-color:#d94f2b}
+.frac-line{height:2px;background:#aaa;width:80%;margin:6px auto}
+.fs-row{display:flex;align-items:center;gap:6px;margin-top:8px}
+.fs-row label{font-size:11px;color:#777;white-space:nowrap}
+.fs-row input[type=number]{flex:1;width:50px}
+.note-inp{width:100%;font-size:12px;border:1px solid #333;border-radius:6px;padding:6px 8px;background:#2a2a2a;color:#ff5c5c;resize:vertical;min-height:56px;outline:none}
+.note-inp:focus{border-color:#d94f2b}
+.note-inp::placeholder{color:#554444}
+.apply-btn{width:100%;margin-top:8px;background:#d94f2b;border:none;border-radius:6px;padding:6px 0;cursor:pointer;font-size:12px;color:#fff;transition:background 0.15s}
+.apply-btn:hover{background:#e0603a}
+#file-inp{display:none}
+#crop-overlay{position:absolute;border:2px dashed #fff;box-shadow:0 0 0 9999px rgba(0,0,0,0.5);cursor:crosshair;display:none;pointer-events:none}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <button class="tool-btn" onclick="document.getElementById('file-inp').click()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    上傳圖片
+  </button>
+  <input type="file" id="file-inp" accept="image/*">
+  <div class="sep"></div>
+  <button class="tool-btn active" id="btn-pen" onclick="setTool('pen')">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+    畫筆
+  </button>
+  <button class="tool-btn" id="btn-circle" onclick="setTool('circle')">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+    圓形
+  </button>
+  <button class="tool-btn" id="btn-arrow" onclick="setTool('arrow')">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="9 5 19 5 19 15"/></svg>
+    箭頭
+  </button>
+  <button class="tool-btn" id="btn-text" onclick="setTool('text')">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+    文字
+  </button>
+  <button class="tool-btn" id="btn-crop" onclick="setTool('crop')">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2v14a2 2 0 002 2h14"/><path d="M18 22V8a2 2 0 00-2-2H2"/></svg>
+    裁切
+  </button>
+  <div class="sep"></div>
+  <button class="tool-btn" id="btn-fill" onclick="setTool('fill')">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="3" y="3" width="18" height="18" rx="2" opacity="0.7"/></svg>
+    色塊
+  </button>
+  <div class="sep"></div>
+  <span class="lbl">顏色</span>
+  <input type="color" id="draw-color" value="#e63030" title="標注顏色">
+  <span class="lbl">粗細</span>
+  <input type="range" id="brush-size" min="1" max="20" value="3">
+  <span class="lbl">透明度</span>
+  <input type="range" id="opacity-range" min="5" max="100" value="100" style="width:64px" title="透明度">
+  <span id="opacity-val" style="font-size:11px;color:#aaa;min-width:28px">100%</span>
+  <span class="lbl">文字大小</span>
+  <input type="number" id="font-size-inp" value="20" min="8" max="100">
+  <span class="lbl">粗細</span>
+  <select id="font-weight-inp" style="font-size:12px;padding:3px 5px;border:1px solid #444;border-radius:5px;background:#2e2e2e;color:#ccc;cursor:pointer">
+    <option value="400">細</option>
+    <option value="600" selected>粗</option>
+    <option value="800">特粗</option>
+  </select>
+  <div class="sep"></div>
+  <button class="tool-btn" onclick="undoLast()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 00-4-4H4"/></svg>
+    復原
+  </button>
+  <button class="tool-btn" onclick="clearAll()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+    清除
+  </button>
+  <button class="tool-btn" onclick="exportImg()" style="margin-left:auto;background:#2e3e2e;border-color:#3d6b3d;color:#7ec87e">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    匯出 JPG
+  </button>
+</div>
+
+<div id="main">
+  <div id="canvas-area" id="ca">
+    <div id="upload-zone" onclick="document.getElementById('file-inp').click()">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      點擊或拖曳上傳圖片<br>
+      <span style="font-size:12px;margin-top:6px;display:block">支援 JPG、PNG</span>
+    </div>
+    <div id="canvas-wrap">
+      <img id="base-img" src="" alt="QC 圖片">
+      <canvas id="draw-canvas"></canvas>
+      <div id="crop-overlay"></div>
+    </div>
+  </div>
+
+  <div id="side-panel">
+    <div class="section">
+      <div class="s-title">分數標注</div>
+      <div class="frac-wrap">
+        <input class="frac-inp" id="frac-num" value="14短" placeholder="分子">
+        <div class="frac-line"></div>
+        <input class="frac-inp" id="frac-den" value="2" placeholder="分母">
+      </div>
+      <div class="fs-row">
+        <label>字體大小</label>
+        <input type="number" id="frac-fs" value="28" min="10" max="120">
+        <span style="font-size:11px;color:#666">px</span>
+      </div>
+      <div class="fs-row">
+        <label>字體粗細</label>
+        <select id="frac-fw" style="flex:1;font-size:11px;padding:3px;border:1px solid #444;border-radius:5px;background:#2a2a2a;color:#ccc">
+          <option value="400">細</option>
+          <option value="600" selected>粗</option>
+          <option value="800">特粗</option>
+        </select>
+      </div>
+      <button class="apply-btn" onclick="applyFraction()">套用分數</button>
+    </div>
+
+    <div class="section">
+      <div class="s-title">底部備註 <span style="color:#ff5c5c">（紅色）</span></div>
+      <textarea class="note-inp" id="note-text" placeholder="大孔向澆杯"></textarea>
+      <div class="fs-row">
+        <label>字體大小</label>
+        <input type="number" id="note-fs" value="22" min="8" max="100">
+        <span style="font-size:11px;color:#666">px</span>
+      </div>
+      <div class="fs-row">
+        <label>字體粗細</label>
+        <select id="note-fw" style="flex:1;font-size:11px;padding:3px;border:1px solid #444;border-radius:5px;background:#2a2a2a;color:#ccc">
+          <option value="400">細</option>
+          <option value="600" selected>粗</option>
+          <option value="800">特粗</option>
+        </select>
+      </div>
+      <button class="apply-btn" onclick="applyNote()">套用備註</button>
+    </div>
+
+    <div class="section">
+      <div class="s-title">畫筆 / 文字顏色</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:11px;color:#777">顏色在上方工具列調整</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const fileInp=document.getElementById('file-inp');
+const baseImg=document.getElementById('base-img');
+const canvasWrap=document.getElementById('canvas-wrap');
+const drawCanvas=document.getElementById('draw-canvas');
+const uploadZone=document.getElementById('upload-zone');
+const ctx=drawCanvas.getContext('2d');
+let tool='pen',drawing=false,startX=0,startY=0;
+let snapshots=[],imgW=0,imgH=0,dispW=0,dispH=0;
+let textInput=null;
+
+function setTool(t){
+  tool=t;
+  ['pen','circle','arrow','text','crop','fill'].forEach(id=>{
+    const b=document.getElementById('btn-'+id);
+    if(b) b.classList.toggle('active',id===t);
+  });
+  drawCanvas.style.cursor=t==='text'?'text':'crosshair';
+}
+
+function getColor(){return document.getElementById('draw-color').value;}
+function getBrush(){return parseInt(document.getElementById('brush-size').value);}
+function getFontSize(){return parseInt(document.getElementById('font-size-inp').value);}
+function getOpacity(){return parseInt(document.getElementById('opacity-range').value)/100;}
+function getFontWeight(){return document.getElementById('font-weight-inp').value;}
+
+document.getElementById('opacity-range').addEventListener('input',function(){
+  document.getElementById('opacity-val').textContent=this.value+'%';
+});
+
+function loadImage(file){
+  if(!file||!file.type.startsWith('image/')) return;
+  const url=URL.createObjectURL(file);
+  baseImg.onload=()=>{
+    imgW=baseImg.naturalWidth; imgH=baseImg.naturalHeight;
+    const maxW=document.getElementById('canvas-area').clientWidth-32;
+    const maxH=document.getElementById('canvas-area').clientHeight-32;
+    const scale=Math.min(1,maxW/imgW,maxH/imgH);
+    dispW=Math.round(imgW*scale); dispH=Math.round(imgH*scale);
+    baseImg.style.width=dispW+'px'; baseImg.style.height=dispH+'px';
+    drawCanvas.width=dispW; drawCanvas.height=dispH;
+    snapshots=[]; saveSnap();
+    uploadZone.style.display='none';
+    canvasWrap.style.display='inline-block';
+  };
+  baseImg.src=url;
+}
+
+fileInp.addEventListener('change',e=>loadImage(e.target.files[0]));
+const ca=document.getElementById('canvas-area');
+ca.addEventListener('dragover',e=>e.preventDefault());
+ca.addEventListener('drop',e=>{e.preventDefault();loadImage(e.dataTransfer.files[0]);});
+
+function saveSnap(){
+  snapshots.push(ctx.getImageData(0,0,drawCanvas.width,drawCanvas.height));
+  if(snapshots.length>40) snapshots.shift();
+}
+function undoLast(){
+  if(snapshots.length>1){
+    snapshots.pop();
+    ctx.putImageData(snapshots[snapshots.length-1],0,0);
+  } else if(cropHistory){
+    const h=cropHistory; cropHistory=null;
+    baseImg.onload=()=>{
+      imgW=h.imgW;imgH=h.imgH;dispW=h.dispW;dispH=h.dispH;
+      baseImg.style.width=h.dispW+'px';baseImg.style.height=h.dispH+'px';
+      drawCanvas.width=h.drawW;drawCanvas.height=h.drawH;
+      snapshots=h.snapshots;
+      ctx.putImageData(snapshots[snapshots.length-1],0,0);
+    };
+    baseImg.src=h.imgSrc;
+  }
+}
+function clearAll(){ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);snapshots=[];saveSnap();}
+
+function getPos(e){
+  const r=drawCanvas.getBoundingClientRect();
+  return{x:e.clientX-r.left,y:e.clientY-r.top};
+}
+
+drawCanvas.addEventListener('mousedown',e=>{
+  if(!imgW) return;
+  const p=getPos(e);
+  startX=p.x; startY=p.y;
+  if(tool==='text'){showTextInput(startX,startY);return;}
+  drawing=true;
+  if(tool==='pen'){lastPenX=startX;lastPenY=startY;}
+});
+
+let lastPenX=0,lastPenY=0;
+drawCanvas.addEventListener('mousemove',e=>{
+  if(!drawing) return;
+  const p=getPos(e);
+  if(tool==='pen'){
+    ctx.globalAlpha=getOpacity();
+    ctx.strokeStyle=getColor();ctx.lineWidth=getBrush();
+    ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.beginPath();ctx.moveTo(lastPenX,lastPenY);ctx.lineTo(p.x,p.y);ctx.stroke();
+    ctx.globalAlpha=1;
+    lastPenX=p.x;lastPenY=p.y;
+  } else if(tool==='circle'||tool==='arrow'||tool==='fill'){
+    ctx.putImageData(snapshots[snapshots.length-1],0,0);
+    const dx=p.x-startX,dy=p.y-startY;
+    ctx.globalAlpha=getOpacity();
+    ctx.strokeStyle=getColor();ctx.lineWidth=getBrush();
+    if(tool==='circle'){
+      ctx.beginPath();
+      ctx.ellipse(startX+dx/2,startY+dy/2,Math.abs(dx/2),Math.abs(dy/2),0,0,Math.PI*2);
+      ctx.stroke();
+    } else if(tool==='arrow'){
+      drawArrow(ctx,startX,startY,p.x,p.y,getColor(),getBrush());
+    } else if(tool==='fill'){
+      ctx.fillStyle=getColor();
+      ctx.fillRect(startX,startY,dx,dy);
+    }
+    ctx.globalAlpha=1;
+  } else if(tool==='crop'){
+    const ov=document.getElementById('crop-overlay');
+    const wr=canvasWrap.getBoundingClientRect();
+    const cx=e.clientX-wr.left,cy=e.clientY-wr.top;
+    ov.style.display='block';
+    ov.style.left=Math.min(startX,cx)+'px';
+    ov.style.top=Math.min(startY,cy)+'px';
+    ov.style.width=Math.abs(cx-startX)+'px';
+    ov.style.height=Math.abs(cy-startY)+'px';
+  }
+});
+
+drawCanvas.addEventListener('mouseup',e=>{
+  if(!drawing) return;
+  drawing=false;
+  const p=getPos(e);
+  if(tool==='crop'){
+    document.getElementById('crop-overlay').style.display='none';
+    doCrop(Math.min(startX,p.x),Math.min(startY,p.y),Math.abs(p.x-startX),Math.abs(p.y-startY));
+  } else {
+    saveSnap();
+  }
+});
+drawCanvas.addEventListener('mouseleave',()=>{if(drawing&&tool==='pen'){drawing=false;saveSnap();}});
+
+// Touch support
+drawCanvas.addEventListener('touchstart',e=>{e.preventDefault();const t=e.touches[0];drawCanvas.dispatchEvent(new MouseEvent('mousedown',{clientX:t.clientX,clientY:t.clientY}));},{passive:false});
+drawCanvas.addEventListener('touchmove',e=>{e.preventDefault();const t=e.touches[0];drawCanvas.dispatchEvent(new MouseEvent('mousemove',{clientX:t.clientX,clientY:t.clientY}));},{passive:false});
+drawCanvas.addEventListener('touchend',e=>{drawCanvas.dispatchEvent(new MouseEvent('mouseup',{}));},{passive:false});
+
+function drawArrow(c,x1,y1,x2,y2,color,lw){
+  c.strokeStyle=color;c.fillStyle=color;c.lineWidth=lw;
+  c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();
+  const angle=Math.atan2(y2-y1,x2-x1);
+  const len=14+lw;
+  c.beginPath();
+  c.moveTo(x2,y2);
+  c.lineTo(x2-len*Math.cos(angle-0.38),y2-len*Math.sin(angle-0.38));
+  c.lineTo(x2-len*Math.cos(angle+0.38),y2-len*Math.sin(angle+0.38));
+  c.closePath();c.fill();
+}
+
+function showTextInput(x,y){
+  if(textInput) textInput.remove();
+  const fs=getFontSize();
+  const inp=document.createElement('input');
+  inp.type='text';inp.placeholder='輸入文字… Enter確認';
+  inp.style.cssText=`position:absolute;left:${x}px;top:${y-fs*0.6}px;font-size:${fs}px;color:${getColor()};background:rgba(0,0,0,0.65);border:1.5px dashed rgba(255,255,255,0.7);outline:none;padding:3px 8px;z-index:100;min-width:100px;border-radius:3px;`;
+  canvasWrap.appendChild(inp);inp.focus();textInput=inp;
+  inp.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){e.preventDefault();commitText(inp,x,y,fs);}
+    if(e.key==='Escape'){inp.remove();textInput=null;}
+  });
+}
+
+function commitText(inp,x,y,fs){
+  const val=inp.value.trim();
+  if(val){
+    ctx.font=`${getFontWeight()} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
+    ctx.fillStyle=getColor();
+    ctx.globalAlpha=getOpacity();
+    ctx.fillText(val,x,y+fs*0.35);
+    ctx.globalAlpha=1;
+    saveSnap();
+  }
+  inp.remove();textInput=null;
+}
+
+function applyFraction(){
+  if(!imgW) return;
+  const num=document.getElementById('frac-num').value;
+  const den=document.getElementById('frac-den').value;
+  const fs=parseInt(document.getElementById('frac-fs').value)||28;
+  const fw=document.getElementById('frac-fw').value;
+  ctx.font=`${fw} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
+  ctx.fillStyle='#111';
+  const nw=ctx.measureText(num).width;
+  const dw=ctx.measureText(den).width;
+  const lineW=Math.max(nw,dw)+16;
+  const lineThick=Math.max(2,Math.round(fs/16));
+  const pad=20;
+  const totalH=fs+lineThick+8+fs+4;
+  const bx=drawCanvas.width-lineW-pad;
+  const by=drawCanvas.height-totalH-pad;
+  ctx.fillText(num,bx+(lineW-nw)/2,by);
+  ctx.fillRect(bx,by+fs*0.18,lineW,lineThick);
+  ctx.fillText(den,bx+(lineW-dw)/2,by+fs*0.18+lineThick+fs+2);
+  saveSnap();
+}
+
+function applyNote(){
+  if(!imgW) return;
+  const note=document.getElementById('note-text').value.trim();
+  if(!note) return;
+  const fs=parseInt(document.getElementById('note-fs').value)||22;
+  const fw=document.getElementById('note-fw').value;
+  ctx.font=`${fw} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
+  ctx.fillStyle='#e53030';
+  const pad=20;
+  ctx.fillText(note, pad, drawCanvas.height-pad);
+  saveSnap();
+}
+
+let cropHistory=null;
+function doCrop(cx,cy,cw,ch){
+  if(cw<5||ch<5) return;
+  const scaleX=imgW/drawCanvas.width;
+  const scaleY=imgH/drawCanvas.height;
+  const imgSnap=ctx.getImageData(cx,cy,cw,ch);
+  const tmp=document.createElement('canvas');
+  tmp.width=Math.round(cw*scaleX);tmp.height=Math.round(ch*scaleY);
+  const tc=tmp.getContext('2d');
+  tc.drawImage(baseImg,cx*scaleX,cy*scaleY,cw*scaleX,ch*scaleY,0,0,tmp.width,tmp.height);
+  cropHistory={
+    imgSrc:baseImg.src,
+    imgW,imgH,dispW,dispH,
+    drawW:drawCanvas.width,drawH:drawCanvas.height,
+    snapshots:[...snapshots.map(s=>s)]
+  };
+  baseImg.onload=()=>{
+    imgW=tmp.width;imgH=tmp.height;
+    dispW=cw;dispH=ch;
+    baseImg.style.width=cw+'px';baseImg.style.height=ch+'px';
+    drawCanvas.width=cw;drawCanvas.height=ch;
+    ctx.putImageData(imgSnap,0,0);
+    snapshots=[];saveSnap();
+  };
+  baseImg.src=tmp.toDataURL();
+}
+
+function exportImg(){
+  if(!imgW) return;
+  const out=document.createElement('canvas');
+  out.width=drawCanvas.width;out.height=drawCanvas.height;
+  const oc=out.getContext('2d');
+  oc.drawImage(baseImg,0,0,drawCanvas.width,drawCanvas.height);
+  oc.drawImage(drawCanvas,0,0);
+  const link=document.createElement('a');
+  link.download='qc_annotated.jpg';
+  link.href=out.toDataURL('image/jpeg',0.95);
+  link.click();
+}
+</script>
+</body>
+</html>
