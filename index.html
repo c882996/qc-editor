@@ -390,7 +390,25 @@ function applyNote(){
   ctx.font=`${fw} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
   ctx.fillStyle='#e53030';
   const pad=20;
-  ctx.fillText(note, pad, drawCanvas.height-pad);
+  const lineH=Math.round(fs*1.4);
+  const maxW=drawCanvas.width-pad*2;
+  const rawLines=note.split('\n');
+  const lines=[];
+  rawLines.forEach(raw=>{
+    const words=raw.split('');
+    let cur='';
+    words.forEach(ch=>{
+      const test=cur+ch;
+      if(ctx.measureText(test).width>maxW&&cur!==''){lines.push(cur);cur=ch;}
+      else cur=test;
+    });
+    lines.push(cur);
+  });
+  const totalH=lines.length*lineH;
+  const startY=drawCanvas.height-pad-totalH+fs;
+  lines.forEach((line,i)=>{
+    ctx.fillText(line, pad, startY+i*lineH);
+  });
   saveSnap();
 }
 
