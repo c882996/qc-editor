@@ -272,7 +272,16 @@ document.getElementById('canvas-area').addEventListener('wheel',e=>{
 // 鍵盤快捷：Space 平移 + 鋼筆快捷 + Ctrl+Z 復原
 document.addEventListener('keydown',e=>{
   if(e.target.matches('input,textarea,select')) return;
-  if((e.ctrlKey||e.metaKey) && e.key==='z'){e.preventDefault();undoLast();return;}
+  if((e.ctrlKey||e.metaKey) && e.key==='z'){
+    e.preventDefault();
+    if(tool==='bezier' && bzPoints.length>0){
+      bzPoints.pop();
+      renderBezierPreview(bzMousePos.x, bzMousePos.y);
+    } else {
+      undoLast();
+    }
+    return;
+  }
   if(e.code==='Space' && !e.repeat){
     e.preventDefault();
     spaceDown=true;
