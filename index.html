@@ -127,8 +127,8 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
   </button>
   <div style="display:flex;align-items:center;gap:4px;margin-left:auto;">
     <select id="export-size" style="font-size:12px;padding:4px 6px;border:1px solid #3d6b3d;border-radius:6px;background:#2e3e2e;color:#7ec87e;cursor:pointer;">
-      <option value="standard">標準 (150ppi)</option>
-      <option value="large">大圖 (200ppi)</option>
+      <option value="standard">符合格子 (7×6cm)</option>
+      <option value="large">大圖 2x (列印清晰)</option>
       <option value="original">原始尺寸</option>
     </select>
     <button class="tool-btn" onclick="exportImg()" style="background:#2e3e2e;border-color:#3d6b3d;color:#7ec87e">
@@ -961,15 +961,15 @@ function exportImg(){
   // 1 inch = 2.54 cm
   let targetW, targetH;
   if(sizeMode==='standard'){
-    // 150 ppi：6cm×150/2.54 ≈ 354px 寬，7cm×150/2.54 ≈ 413px 高
-    const ppi=150;
-    targetW=Math.round(6/2.54*ppi);  // 354
-    targetH=Math.round(7/2.54*ppi);  // 413
+    // Excel 顯示用 96 ppi：6cm×96/2.54 ≈ 227px 寬，7cm×96/2.54 ≈ 265px 高
+    const ppi=96;
+    targetW=Math.round(6/2.54*ppi);  // 227
+    targetH=Math.round(7/2.54*ppi);  // 265
   } else if(sizeMode==='large'){
-    // 200 ppi
-    const ppi=200;
-    targetW=Math.round(6/2.54*ppi);  // 472
-    targetH=Math.round(7/2.54*ppi);  // 551
+    // 2倍解析度（Retina / 列印清晰）：192 ppi
+    const ppi=192;
+    targetW=Math.round(6/2.54*ppi);  // 453
+    targetH=Math.round(7/2.54*ppi);  // 529
   } else {
     // 原始尺寸
     targetW=imgW; targetH=imgH;
