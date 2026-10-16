@@ -17,11 +17,12 @@ input[type=range]{width:70px;accent-color:#d94f2b;cursor:pointer}
 input[type=color]{width:30px;height:28px;border:1px solid #444;border-radius:5px;cursor:pointer;padding:2px;background:#2e2e2e}
 input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid #444;border-radius:5px;padding:3px 4px;background:#2e2e2e;color:#e8e8e8}
 #main{display:flex;flex:1;overflow:hidden}
-#canvas-area{flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:flex-start;padding:16px;background:#111}
-#canvas-wrap{position:relative;display:none}
+#canvas-area{flex:1;overflow:hidden;position:relative;background:#111;cursor:default;}
+#canvas-wrap{position:absolute;display:none;transform-origin:top left;}
 #base-img{display:block;pointer-events:none;max-width:none}
 #draw-canvas{position:absolute;top:0;left:0;cursor:crosshair}
-#upload-zone{width:100%;max-width:600px;border:2px dashed #444;border-radius:12px;padding:60px 24px;text-align:center;cursor:pointer;color:#666;font-size:15px;transition:all 0.2s;margin:auto}
+#pen-canvas{position:absolute;top:0;left:0;pointer-events:none}
+#upload-zone{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:360px;border:2px dashed #444;border-radius:12px;padding:60px 24px;text-align:center;cursor:pointer;color:#666;font-size:15px;transition:all 0.2s;}
 #upload-zone:hover{border-color:#d94f2b;color:#ccc;background:rgba(217,79,43,0.05)}
 #upload-zone svg{display:block;margin:0 auto 12px;opacity:0.4}
 #side-panel{width:210px;background:#1e1e1e;border-left:1px solid #333;padding:14px;display:flex;flex-direction:column;gap:0;overflow-y:auto;flex-shrink:0}
@@ -42,6 +43,19 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
 .apply-btn:hover{background:#e0603a}
 #file-inp{display:none}
 #crop-overlay{position:absolute;border:2px dashed #fff;box-shadow:0 0 0 9999px rgba(0,0,0,0.5);cursor:crosshair;display:none;pointer-events:none}
+
+/* 鋼筆工具提示 */
+#pen-hint{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);color:#ddd;font-size:12px;padding:6px 14px;border-radius:20px;pointer-events:none;display:none;z-index:200;white-space:nowrap}
+
+/* 路徑完成後的填色選項彈窗 */
+#fill-popup{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#2a2a2a;border:1px solid #555;border-radius:10px;padding:18px 20px;z-index:300;display:none;min-width:220px;box-shadow:0 8px 32px rgba(0,0,0,0.6)}
+#fill-popup h3{font-size:13px;color:#ccc;margin-bottom:12px;font-weight:500}
+#fill-popup .row{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:#aaa}
+#fill-popup .row input{flex:1}
+#fill-popup .btns{display:flex;gap:8px;margin-top:14px}
+#fill-popup .btns button{flex:1;padding:7px;border-radius:6px;border:none;cursor:pointer;font-size:12px}
+#fill-popup .btn-fill-ok{background:#d94f2b;color:#fff}
+#fill-popup .btn-fill-skip{background:#444;color:#ccc}
 </style>
 </head>
 <body>
@@ -56,6 +70,10 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
   <button class="tool-btn active" id="btn-pen" onclick="setTool('pen')">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
     畫筆
+  </button>
+  <button class="tool-btn" id="btn-bezier" onclick="setTool('bezier')">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20 C6 8, 18 8, 21 20"/><circle cx="3" cy="20" r="2" fill="currentColor"/><circle cx="21" cy="20" r="2" fill="currentColor"/><circle cx="7" cy="9" r="1.5" fill="#888" stroke="none"/><circle cx="17" cy="9" r="1.5" fill="#888" stroke="none"/><line x1="3" y1="20" x2="7" y2="9" stroke="#666" stroke-dasharray="2,2"/><line x1="21" y1="20" x2="17" y2="9" stroke="#666" stroke-dasharray="2,2"/></svg>
+    鋼筆
   </button>
   <button class="tool-btn" id="btn-circle" onclick="setTool('circle')">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
@@ -110,7 +128,7 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
 </div>
 
 <div id="main">
-  <div id="canvas-area" id="ca">
+  <div id="canvas-area">
     <div id="upload-zone" onclick="document.getElementById('file-inp').click()">
       <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
       點擊或拖曳上傳圖片<br>
@@ -119,6 +137,7 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
     <div id="canvas-wrap">
       <img id="base-img" src="" alt="QC 圖片">
       <canvas id="draw-canvas"></canvas>
+      <canvas id="pen-canvas"></canvas>
       <div id="crop-overlay"></div>
     </div>
   </div>
@@ -166,6 +185,19 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
       <button class="apply-btn" onclick="applyNote()">套用備註</button>
     </div>
 
+    <div class="section" id="pen-guide-section" style="display:none">
+      <div class="s-title" style="color:#f0a040">🖊 鋼筆模式</div>
+      <div style="font-size:11px;color:#888;line-height:1.7">
+        <b style="color:#ccc">點擊</b> 建立錨點<br>
+        <b style="color:#ccc">點擊拖曳</b> 產生曲線控制把手<br>
+        <b style="color:#ccc">雙擊 / Enter</b> 封閉路徑並填色<br>
+        <b style="color:#ccc">Escape</b> 取消目前路徑<br><br>
+        <span style="color:#aaa">填色顏色與透明度<br>使用上方工具列設定</span>
+      </div>
+      <button class="apply-btn" style="margin-top:10px;background:#444" onclick="cancelBezier()">取消路徑 (Esc)</button>
+      <button class="apply-btn" style="margin-top:6px" onclick="closeBezierPath()">封閉並填色 (Enter)</button>
+    </div>
+
     <div class="section">
       <div class="s-title">畫筆 / 文字顏色</div>
       <div style="display:flex;align-items:center;gap:8px">
@@ -175,24 +207,128 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
   </div>
 </div>
 
+<!-- 鋼筆操作提示 -->
+<div id="pen-hint">點擊建立錨點 ｜ 拖曳產生曲線 ｜ 雙擊或 Enter 封閉填色 ｜ Esc 取消</div>
+<!-- 縮放提示 -->
+<div id="zoom-indicator" style="position:fixed;bottom:14px;right:16px;background:rgba(0,0,0,0.7);color:#ccc;font-size:12px;padding:5px 12px;border-radius:16px;pointer-events:none;display:none;z-index:200;">100%</div>
+
 <script>
+/* ===================== 基礎變數 ===================== */
 const fileInp=document.getElementById('file-inp');
 const baseImg=document.getElementById('base-img');
 const canvasWrap=document.getElementById('canvas-wrap');
 const drawCanvas=document.getElementById('draw-canvas');
+const penCanvas=document.getElementById('pen-canvas');
 const uploadZone=document.getElementById('upload-zone');
 const ctx=drawCanvas.getContext('2d');
+const pctx=penCanvas.getContext('2d');
 let tool='pen',drawing=false,startX=0,startY=0;
 let snapshots=[],imgW=0,imgH=0,dispW=0,dispH=0;
 let textInput=null;
+let lastPenX=0,lastPenY=0;
+let cropHistory=null;
 
+/* ===================== 縮放 & 平移 ===================== */
+let zoomLevel=1;
+const ZOOM_MIN=0.25, ZOOM_MAX=8, ZOOM_STEP=0.15;
+let zoomHideTimer=null;
+let panX=16, panY=16;           // canvas-wrap 左上角位置
+let isPanning=false;
+let spaceDown=false;
+let panStartX=0, panStartY=0;
+let panOriginX=0, panOriginY=0;
+
+function applyTransform(){
+  canvasWrap.style.left=panX+'px';
+  canvasWrap.style.top=panY+'px';
+  canvasWrap.style.transform=`scale(${zoomLevel})`;
+  const ind=document.getElementById('zoom-indicator');
+  ind.textContent=Math.round(zoomLevel*100)+'%';
+  ind.style.display='block';
+  clearTimeout(zoomHideTimer);
+  zoomHideTimer=setTimeout(()=>{ ind.style.display='none'; },1200);
+}
+function applyZoom(){ applyTransform(); }
+
+// Alt+滾輪縮放（以滑鼠位置為中心）
+document.getElementById('canvas-area').addEventListener('wheel',e=>{
+  if(!e.altKey) return;
+  e.preventDefault();
+  const ca=document.getElementById('canvas-area');
+  const caRect=ca.getBoundingClientRect();
+  const mx=e.clientX-caRect.left;
+  const my=e.clientY-caRect.top;
+  // 滑鼠在 canvas 上的比例位置
+  const beforeX=(mx-panX)/zoomLevel;
+  const beforeY=(my-panY)/zoomLevel;
+  const delta=e.deltaY>0?-ZOOM_STEP:ZOOM_STEP;
+  zoomLevel=Math.min(ZOOM_MAX,Math.max(ZOOM_MIN,zoomLevel+delta));
+  // 保持滑鼠指向的點不動
+  panX=mx-beforeX*zoomLevel;
+  panY=my-beforeY*zoomLevel;
+  applyTransform();
+},{passive:false});
+
+// 鍵盤快捷：Space 平移 + 鋼筆快捷 + Ctrl+Z 復原
+document.addEventListener('keydown',e=>{
+  if(e.target.matches('input,textarea,select')) return;
+  if((e.ctrlKey||e.metaKey) && e.key==='z'){e.preventDefault();undoLast();return;}
+  if(e.code==='Space' && !e.repeat){
+    e.preventDefault();
+    spaceDown=true;
+    document.getElementById('canvas-area').style.cursor='grab';
+    drawCanvas.style.cursor='grab';
+  }
+  if(tool==='bezier'){
+    if(e.key==='Enter'){e.preventDefault();closeBezierPath();}
+    if(e.key==='Escape'){e.preventDefault();cancelBezier();}
+  }
+});
+document.addEventListener('keyup',e=>{
+  if(e.code==='Space'){
+    spaceDown=false;
+    isPanning=false;
+    document.getElementById('canvas-area').style.cursor='default';
+    drawCanvas.style.cursor= tool==='text'?'text':'crosshair';
+  }
+});
+
+// 在 canvas-area 上拖曳平移
+document.getElementById('canvas-area').addEventListener('mousedown',e=>{
+  if(spaceDown){
+    isPanning=true;
+    panStartX=e.clientX; panStartY=e.clientY;
+    panOriginX=panX; panOriginY=panY;
+    document.getElementById('canvas-area').style.cursor='grabbing';
+    drawCanvas.style.cursor='grabbing';
+    e.stopPropagation();
+  }
+});
+document.addEventListener('mousemove',e=>{
+  if(!isPanning) return;
+  panX=panOriginX+(e.clientX-panStartX);
+  panY=panOriginY+(e.clientY-panStartY);
+  applyTransform();
+});
+document.addEventListener('mouseup',e=>{
+  if(isPanning){
+    isPanning=false;
+    document.getElementById('canvas-area').style.cursor=spaceDown?'grab':'default';
+    drawCanvas.style.cursor=spaceDown?'grab':(tool==='text'?'text':'crosshair');
+  }
+});
+
+/* ===================== 工具切換 ===================== */
 function setTool(t){
+  if(tool==='bezier' && t!=='bezier') cancelBezier();
   tool=t;
-  ['pen','circle','arrow','text','crop','fill'].forEach(id=>{
+  ['pen','bezier','circle','arrow','text','crop','fill'].forEach(id=>{
     const b=document.getElementById('btn-'+id);
     if(b) b.classList.toggle('active',id===t);
   });
-  drawCanvas.style.cursor=t==='text'?'text':'crosshair';
+  drawCanvas.style.cursor=t==='text'?'text':(t==='bezier'?'crosshair':'crosshair');
+  document.getElementById('pen-hint').style.display=t==='bezier'?'block':'none';
+  document.getElementById('pen-guide-section').style.display=t==='bezier'?'block':'none';
 }
 
 function getColor(){return document.getElementById('draw-color').value;}
@@ -205,6 +341,7 @@ document.getElementById('opacity-range').addEventListener('input',function(){
   document.getElementById('opacity-val').textContent=this.value+'%';
 });
 
+/* ===================== 載入圖片 ===================== */
 function loadImage(file){
   if(!file||!file.type.startsWith('image/')) return;
   const url=URL.createObjectURL(file);
@@ -216,18 +353,24 @@ function loadImage(file){
     dispW=Math.round(imgW*scale); dispH=Math.round(imgH*scale);
     baseImg.style.width=dispW+'px'; baseImg.style.height=dispH+'px';
     drawCanvas.width=dispW; drawCanvas.height=dispH;
+    penCanvas.width=dispW; penCanvas.height=dispH;
     snapshots=[]; saveSnap();
+    // 置中顯示
+    const ca2=document.getElementById('canvas-area');
+    panX=Math.max(16,(ca2.clientWidth-dispW*zoomLevel)/2);
+    panY=Math.max(16,(ca2.clientHeight-dispH*zoomLevel)/2);
     uploadZone.style.display='none';
     canvasWrap.style.display='inline-block';
+    applyTransform();
   };
   baseImg.src=url;
 }
-
 fileInp.addEventListener('change',e=>loadImage(e.target.files[0]));
 const ca=document.getElementById('canvas-area');
 ca.addEventListener('dragover',e=>e.preventDefault());
 ca.addEventListener('drop',e=>{e.preventDefault();loadImage(e.dataTransfer.files[0]);});
 
+/* ===================== 快照 ===================== */
 function saveSnap(){
   snapshots.push(ctx.getImageData(0,0,drawCanvas.width,drawCanvas.height));
   if(snapshots.length>40) snapshots.shift();
@@ -242,32 +385,201 @@ function undoLast(){
       imgW=h.imgW;imgH=h.imgH;dispW=h.dispW;dispH=h.dispH;
       baseImg.style.width=h.dispW+'px';baseImg.style.height=h.dispH+'px';
       drawCanvas.width=h.drawW;drawCanvas.height=h.drawH;
+      penCanvas.width=h.drawW;penCanvas.height=h.drawH;
       snapshots=h.snapshots;
       ctx.putImageData(snapshots[snapshots.length-1],0,0);
     };
     baseImg.src=h.imgSrc;
   }
 }
-function clearAll(){ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);snapshots=[];saveSnap();}
-
-function getPos(e){
-  const r=drawCanvas.getBoundingClientRect();
-  return{x:e.clientX-r.left,y:e.clientY-r.top};
+function clearAll(){
+  ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+  snapshots=[];saveSnap();
+  cancelBezier();
 }
 
+/* ===================== 滑鼠座標 ===================== */
+function getPos(e){
+  const r=drawCanvas.getBoundingClientRect();
+  return{
+    x:(e.clientX-r.left)/zoomLevel,
+    y:(e.clientY-r.top)/zoomLevel
+  };
+}
+
+/* ===================== 鋼筆（貝茲）工具 ===================== */
+// 每個錨點: { x, y, cp1x, cp1y, cp2x, cp2y, hasCp }
+let bzPoints=[];
+let bzDragging=false;  // 目前是否在拖曳控制把手
+let bzDragCp={x:0,y:0}; // 正在拖曳的 cp2
+let bzMousePos={x:0,y:0};
+
+function cancelBezier(){
+  bzPoints=[];
+  bzDragging=false;
+  pctx.clearRect(0,0,penCanvas.width,penCanvas.height);
+}
+
+function closeBezierPath(){
+  if(bzPoints.length<2){ cancelBezier(); return; }
+  // 畫到 draw-canvas，然後詢問填色
+  commitBezierToCanvas(true);
+}
+
+function commitBezierToCanvas(doFill){
+  if(bzPoints.length<2) return;
+  ctx.save();
+  ctx.globalAlpha=getOpacity();
+  ctx.strokeStyle=getColor();
+  ctx.lineWidth=getBrush();
+  ctx.lineCap='round';
+  ctx.lineJoin='round';
+  ctx.beginPath();
+  ctx.moveTo(bzPoints[0].x, bzPoints[0].y);
+  for(let i=1;i<bzPoints.length;i++){
+    const prev=bzPoints[i-1];
+    const cur=bzPoints[i];
+    ctx.bezierCurveTo(
+      prev.cp2x, prev.cp2y,
+      cur.cp1x,  cur.cp1y,
+      cur.x,     cur.y
+    );
+  }
+  if(doFill){
+    // 封閉回第一點
+    const prev=bzPoints[bzPoints.length-1];
+    const first=bzPoints[0];
+    ctx.bezierCurveTo(prev.cp2x,prev.cp2y,first.cp1x,first.cp1y,first.x,first.y);
+    ctx.closePath();
+    ctx.fillStyle=getColor();
+    ctx.fill();
+  }
+  ctx.stroke();
+  ctx.restore();
+  saveSnap();
+  cancelBezier();
+}
+
+function renderBezierPreview(mouseX, mouseY){
+  pctx.clearRect(0,0,penCanvas.width,penCanvas.height);
+  if(bzPoints.length===0) return;
+
+  pctx.save();
+  pctx.strokeStyle=getColor();
+  pctx.lineWidth=Math.max(1,getBrush());
+  pctx.lineCap='round';
+  pctx.lineJoin='round';
+  pctx.setLineDash([]);
+
+  // 已確認的路徑段
+  pctx.beginPath();
+  pctx.moveTo(bzPoints[0].x, bzPoints[0].y);
+  for(let i=1;i<bzPoints.length;i++){
+    const prev=bzPoints[i-1];
+    const cur=bzPoints[i];
+    pctx.bezierCurveTo(prev.cp2x,prev.cp2y,cur.cp1x,cur.cp1y,cur.x,cur.y);
+  }
+  pctx.stroke();
+
+  // 預覽線：從最後一點到滑鼠
+  if(mouseX!==null){
+    const last=bzPoints[bzPoints.length-1];
+    pctx.beginPath();
+    pctx.setLineDash([4,4]);
+    pctx.globalAlpha=0.5;
+    // 若正在拖曳，用即時 cp2；否則從 cp2 做簡單直線
+    pctx.moveTo(last.x, last.y);
+    pctx.bezierCurveTo(last.cp2x,last.cp2y,mouseX,mouseY,mouseX,mouseY);
+    pctx.stroke();
+    pctx.setLineDash([]);
+    pctx.globalAlpha=1;
+  }
+
+  // 畫錨點與控制把手
+  bzPoints.forEach((pt,i)=>{
+    // 控制把手線
+    if(pt.hasCp){
+      pctx.beginPath();
+      pctx.setLineDash([3,3]);
+      pctx.strokeStyle='rgba(255,255,255,0.35)';
+      pctx.lineWidth=1;
+      // cp1
+      pctx.moveTo(pt.cp1x,pt.cp1y);pctx.lineTo(pt.x,pt.y);
+      // cp2
+      pctx.moveTo(pt.x,pt.y);pctx.lineTo(pt.cp2x,pt.cp2y);
+      pctx.stroke();
+      pctx.setLineDash([]);
+      // cp 圓點（小）
+      pctx.fillStyle='rgba(255,200,80,0.9)';
+      [[pt.cp1x,pt.cp1y],[pt.cp2x,pt.cp2y]].forEach(([cx,cy])=>{
+        pctx.beginPath();pctx.arc(cx,cy,2.5,0,Math.PI*2);pctx.fill();
+      });
+    }
+    // 錨點（小）
+    pctx.strokeStyle=i===0?'#4cff88':'rgba(255,255,255,0.9)';
+    pctx.lineWidth=1.5;
+    pctx.fillStyle=i===0?'rgba(76,255,136,0.25)':'rgba(255,255,255,0.15)';
+    pctx.beginPath();pctx.arc(pt.x,pt.y,3,0,Math.PI*2);
+    pctx.fill();pctx.stroke();
+  });
+
+  pctx.restore();
+}
+
+/* ===================== Canvas 事件 ===================== */
+let bzClickTimer=null; // 用來區分單擊 vs 雙擊
+
 drawCanvas.addEventListener('mousedown',e=>{
-  if(!imgW) return;
+  if(!imgW || spaceDown) return;
   const p=getPos(e);
   startX=p.x; startY=p.y;
+
   if(tool==='text'){showTextInput(startX,startY);return;}
+  if(tool==='bezier'){
+    bzDragging=true;
+    // 雙擊偵測：若 100ms 內再次 mousedown，視為雙擊封閉
+    if(bzClickTimer){
+      clearTimeout(bzClickTimer);
+      bzClickTimer=null;
+      bzDragging=false;
+      closeBezierPath();
+      return;
+    }
+    bzClickTimer=setTimeout(()=>{
+      bzClickTimer=null;
+    },280);
+    // 新增錨點
+    bzPoints.push({
+      x:p.x,y:p.y,
+      cp1x:p.x,cp1y:p.y,
+      cp2x:p.x,cp2y:p.y,
+      hasCp:false
+    });
+    return;
+  }
   drawing=true;
   if(tool==='pen'){lastPenX=startX;lastPenY=startY;}
 });
 
-let lastPenX=0,lastPenY=0;
 drawCanvas.addEventListener('mousemove',e=>{
-  if(!drawing) return;
   const p=getPos(e);
+  bzMousePos={x:p.x,y:p.y};
+
+  if(tool==='bezier'){
+    if(bzDragging && bzPoints.length>0){
+      const last=bzPoints[bzPoints.length-1];
+      // 拖曳時設定 cp2（往反方向鏡射給 cp1）
+      last.cp2x=p.x; last.cp2y=p.y;
+      // cp1 = 錨點的鏡射
+      last.cp1x=2*last.x-p.x;
+      last.cp1y=2*last.y-p.y;
+      last.hasCp=true;
+    }
+    renderBezierPreview(p.x,p.y);
+    return;
+  }
+
+  if(!drawing) return;
   if(tool==='pen'){
     ctx.globalAlpha=getOpacity();
     ctx.strokeStyle=getColor();ctx.lineWidth=getBrush();
@@ -304,9 +616,14 @@ drawCanvas.addEventListener('mousemove',e=>{
 });
 
 drawCanvas.addEventListener('mouseup',e=>{
+  const p=getPos(e);
+  if(tool==='bezier'){
+    bzDragging=false;
+    renderBezierPreview(p.x,p.y);
+    return;
+  }
   if(!drawing) return;
   drawing=false;
-  const p=getPos(e);
   if(tool==='crop'){
     document.getElementById('crop-overlay').style.display='none';
     doCrop(Math.min(startX,p.x),Math.min(startY,p.y),Math.abs(p.x-startX),Math.abs(p.y-startY));
@@ -314,13 +631,22 @@ drawCanvas.addEventListener('mouseup',e=>{
     saveSnap();
   }
 });
-drawCanvas.addEventListener('mouseleave',()=>{if(drawing&&tool==='pen'){drawing=false;saveSnap();}});
+
+
+
+drawCanvas.addEventListener('mouseleave',()=>{
+  if(tool==='bezier'){ bzDragging=false; renderBezierPreview(null,null); return; }
+  if(drawing&&tool==='pen'){drawing=false;saveSnap();}
+});
+
+
 
 // Touch support
 drawCanvas.addEventListener('touchstart',e=>{e.preventDefault();const t=e.touches[0];drawCanvas.dispatchEvent(new MouseEvent('mousedown',{clientX:t.clientX,clientY:t.clientY}));},{passive:false});
 drawCanvas.addEventListener('touchmove',e=>{e.preventDefault();const t=e.touches[0];drawCanvas.dispatchEvent(new MouseEvent('mousemove',{clientX:t.clientX,clientY:t.clientY}));},{passive:false});
 drawCanvas.addEventListener('touchend',e=>{drawCanvas.dispatchEvent(new MouseEvent('mouseup',{}));},{passive:false});
 
+/* ===================== 箭頭 ===================== */
 function drawArrow(c,x1,y1,x2,y2,color,lw){
   c.strokeStyle=color;c.fillStyle=color;c.lineWidth=lw;
   c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();
@@ -333,19 +659,20 @@ function drawArrow(c,x1,y1,x2,y2,color,lw){
   c.closePath();c.fill();
 }
 
+/* ===================== 文字工具 ===================== */
 function showTextInput(x,y){
   if(textInput) textInput.remove();
   const fs=getFontSize();
   const inp=document.createElement('input');
   inp.type='text';inp.placeholder='輸入文字… Enter確認';
-  inp.style.cssText=`position:absolute;left:${x}px;top:${y-fs*0.6}px;font-size:${fs}px;color:${getColor()};background:rgba(0,0,0,0.65);border:1.5px dashed rgba(255,255,255,0.7);outline:none;padding:3px 8px;z-index:100;min-width:100px;border-radius:3px;`;
+  const dispFs=Math.round(fs*zoomLevel);
+  inp.style.cssText=`position:absolute;left:${x*zoomLevel}px;top:${y*zoomLevel-dispFs*0.6}px;font-size:${dispFs}px;color:${getColor()};background:rgba(0,0,0,0.65);border:1.5px dashed rgba(255,255,255,0.7);outline:none;padding:3px 8px;z-index:100;min-width:100px;border-radius:3px;`;
   canvasWrap.appendChild(inp);inp.focus();textInput=inp;
   inp.addEventListener('keydown',e=>{
     if(e.key==='Enter'){e.preventDefault();commitText(inp,x,y,fs);}
     if(e.key==='Escape'){inp.remove();textInput=null;}
   });
 }
-
 function commitText(inp,x,y,fs){
   const val=inp.value.trim();
   if(val){
@@ -359,6 +686,7 @@ function commitText(inp,x,y,fs){
   inp.remove();textInput=null;
 }
 
+/* ===================== 分數標注 ===================== */
 function applyFraction(){
   if(!imgW) return;
   const num=document.getElementById('frac-num').value;
@@ -381,6 +709,7 @@ function applyFraction(){
   saveSnap();
 }
 
+/* ===================== 底部備註 ===================== */
 function applyNote(){
   if(!imgW) return;
   const note=document.getElementById('note-text').value.trim();
@@ -406,13 +735,11 @@ function applyNote(){
   });
   const totalH=lines.length*lineH;
   const startY=drawCanvas.height-pad-totalH+fs;
-  lines.forEach((line,i)=>{
-    ctx.fillText(line, pad, startY+i*lineH);
-  });
+  lines.forEach((line,i)=>{ctx.fillText(line,pad,startY+i*lineH);});
   saveSnap();
 }
 
-let cropHistory=null;
+/* ===================== 裁切 ===================== */
 function doCrop(cx,cy,cw,ch){
   if(cw<5||ch<5) return;
   const scaleX=imgW/drawCanvas.width;
@@ -423,8 +750,7 @@ function doCrop(cx,cy,cw,ch){
   const tc=tmp.getContext('2d');
   tc.drawImage(baseImg,cx*scaleX,cy*scaleY,cw*scaleX,ch*scaleY,0,0,tmp.width,tmp.height);
   cropHistory={
-    imgSrc:baseImg.src,
-    imgW,imgH,dispW,dispH,
+    imgSrc:baseImg.src,imgW,imgH,dispW,dispH,
     drawW:drawCanvas.width,drawH:drawCanvas.height,
     snapshots:[...snapshots.map(s=>s)]
   };
@@ -433,12 +759,14 @@ function doCrop(cx,cy,cw,ch){
     dispW=cw;dispH=ch;
     baseImg.style.width=cw+'px';baseImg.style.height=ch+'px';
     drawCanvas.width=cw;drawCanvas.height=ch;
+    penCanvas.width=cw;penCanvas.height=ch;
     ctx.putImageData(imgSnap,0,0);
     snapshots=[];saveSnap();
   };
   baseImg.src=tmp.toDataURL();
 }
 
+/* ===================== 匯出 ===================== */
 function exportImg(){
   if(!imgW) return;
   const out=document.createElement('canvas');
