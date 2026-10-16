@@ -42,7 +42,11 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
 .apply-btn{width:100%;margin-top:8px;background:#d94f2b;border:none;border-radius:6px;padding:6px 0;cursor:pointer;font-size:12px;color:#fff;transition:background 0.15s}
 .apply-btn:hover{background:#e0603a}
 #file-inp{display:none}
-#crop-overlay{position:absolute;border:2px dashed #fff;box-shadow:0 0 0 9999px rgba(0,0,0,0.5);cursor:crosshair;display:none;pointer-events:none}
+#crop-canvas{position:absolute;top:0;left:0;pointer-events:none;display:none;}
+#crop-confirm{position:absolute;display:none;gap:6px;z-index:50;}
+#crop-confirm button{padding:5px 14px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-family:inherit;}
+.btn-crop-ok{background:#4caf50;color:#fff;}
+.btn-crop-cancel{background:#555;color:#ccc;}
 
 /* 鋼筆工具提示 */
 #pen-hint{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);color:#ddd;font-size:12px;padding:6px 14px;border-radius:20px;pointer-events:none;display:none;z-index:200;white-space:nowrap}
@@ -121,10 +125,17 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
     清除
   </button>
-  <button class="tool-btn" onclick="exportImg()" style="margin-left:auto;background:#2e3e2e;border-color:#3d6b3d;color:#7ec87e">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-    匯出 JPG
-  </button>
+  <div style="display:flex;align-items:center;gap:4px;margin-left:auto;">
+    <select id="export-size" style="font-size:12px;padding:4px 6px;border:1px solid #3d6b3d;border-radius:6px;background:#2e3e2e;color:#7ec87e;cursor:pointer;">
+      <option value="standard">標準 (150ppi)</option>
+      <option value="large">大圖 (200ppi)</option>
+      <option value="original">原始尺寸</option>
+    </select>
+    <button class="tool-btn" onclick="exportImg()" style="background:#2e3e2e;border-color:#3d6b3d;color:#7ec87e">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      匯出 JPG
+    </button>
+  </div>
 </div>
 
 <div id="main">
@@ -138,7 +149,11 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
       <img id="base-img" src="" alt="QC 圖片">
       <canvas id="draw-canvas"></canvas>
       <canvas id="pen-canvas"></canvas>
-      <div id="crop-overlay"></div>
+      <canvas id="crop-canvas"></canvas>
+      <div id="crop-confirm">
+        <button class="btn-crop-ok" onclick="confirmCrop()">✓ 確認裁切</button>
+        <button class="btn-crop-cancel" onclick="cancelCrop()">✕ 取消</button>
+      </div>
     </div>
   </div>
 
@@ -152,7 +167,7 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
       </div>
       <div class="fs-row">
         <label>字體大小</label>
-        <input type="number" id="frac-fs" value="28" min="10" max="120">
+        <input type="number" id="frac-fs" value="60" min="10" max="120">
         <span style="font-size:11px;color:#666">px</span>
       </div>
       <div class="fs-row">
@@ -171,7 +186,7 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
       <textarea class="note-inp" id="note-text" placeholder="大孔向澆杯"></textarea>
       <div class="fs-row">
         <label>字體大小</label>
-        <input type="number" id="note-fs" value="22" min="8" max="100">
+        <input type="number" id="note-fs" value="40" min="8" max="100">
         <span style="font-size:11px;color:#666">px</span>
       </div>
       <div class="fs-row">
@@ -292,6 +307,10 @@ document.addEventListener('keydown',e=>{
     if(e.key==='Enter'){e.preventDefault();closeBezierPath();}
     if(e.key==='Escape'){e.preventDefault();cancelBezier();}
   }
+  if(tool==='crop'){
+    if(e.key==='Enter'){e.preventDefault();confirmCrop();}
+    if(e.key==='Escape'){e.preventDefault();cancelCrop();setTool('pen');}
+  }
 });
 document.addEventListener('keyup',e=>{
   if(e.code==='Space'){
@@ -330,14 +349,16 @@ document.addEventListener('mouseup',e=>{
 /* ===================== 工具切換 ===================== */
 function setTool(t){
   if(tool==='bezier' && t!=='bezier') cancelBezier();
+  if(tool==='crop' && t!=='crop') cancelCrop();
   tool=t;
   ['pen','bezier','circle','arrow','text','crop','fill'].forEach(id=>{
     const b=document.getElementById('btn-'+id);
     if(b) b.classList.toggle('active',id===t);
   });
-  drawCanvas.style.cursor=t==='text'?'text':(t==='bezier'?'crosshair':'crosshair');
+  drawCanvas.style.cursor=t==='text'?'text':'crosshair';
   document.getElementById('pen-hint').style.display=t==='bezier'?'block':'none';
   document.getElementById('pen-guide-section').style.display=t==='bezier'?'block':'none';
+  if(t==='crop') enterCropMode();
 }
 
 function getColor(){return document.getElementById('draw-color').value;}
@@ -612,15 +633,6 @@ drawCanvas.addEventListener('mousemove',e=>{
       ctx.fillRect(startX,startY,dx,dy);
     }
     ctx.globalAlpha=1;
-  } else if(tool==='crop'){
-    const ov=document.getElementById('crop-overlay');
-    const wr=canvasWrap.getBoundingClientRect();
-    const cx=e.clientX-wr.left,cy=e.clientY-wr.top;
-    ov.style.display='block';
-    ov.style.left=Math.min(startX,cx)+'px';
-    ov.style.top=Math.min(startY,cy)+'px';
-    ov.style.width=Math.abs(cx-startX)+'px';
-    ov.style.height=Math.abs(cy-startY)+'px';
   }
 });
 
@@ -633,12 +645,7 @@ drawCanvas.addEventListener('mouseup',e=>{
   }
   if(!drawing) return;
   drawing=false;
-  if(tool==='crop'){
-    document.getElementById('crop-overlay').style.display='none';
-    doCrop(Math.min(startX,p.x),Math.min(startY,p.y),Math.abs(p.x-startX),Math.abs(p.y-startY));
-  } else {
-    saveSnap();
-  }
+  saveSnap();
 });
 
 
@@ -748,16 +755,57 @@ function applyNote(){
   saveSnap();
 }
 
-/* ===================== 裁切 ===================== */
-function doCrop(cx,cy,cw,ch){
-  if(cw<5||ch<5) return;
+/* ===================== 裁切（控制點拖曳）===================== */
+const cropCv=document.getElementById('crop-canvas');
+const cctx=cropCv.getContext('2d');
+const cropConfirm=document.getElementById('crop-confirm');
+
+// 裁切框：canvas 座標
+let cropRect={x:0,y:0,w:0,h:0};
+let cropActive=false;
+let cropDragHandle=null; // 'tl','tc','tr','ml','mr','bl','bc','br','move'
+let cropDragStart={x:0,y:0};
+let cropRectStart={x:0,y:0,w:0,h:0};
+const HANDLE_R=6; // 控制點半徑（畫面px，不受zoom影響）
+
+function enterCropMode(){
+  if(!imgW) return;
+  cropActive=true;
+  cropCv.width=drawCanvas.width;
+  cropCv.height=drawCanvas.height;
+  // 初始框 = 整張圖，留一點內縮
+  const pad=Math.round(Math.min(drawCanvas.width,drawCanvas.height)*0.05);
+  cropRect={x:pad,y:pad,w:drawCanvas.width-pad*2,h:drawCanvas.height-pad*2};
+  cropCv.style.display='block';
+  drawCanvas.style.pointerEvents='none';
+  renderCropOverlay();
+  positionCropConfirm();
+}
+
+function exitCropMode(){
+  cropActive=false;
+  cropCv.style.display='none';
+  cropConfirm.style.display='none';
+  drawCanvas.style.pointerEvents='auto';
+  cropDragHandle=null;
+}
+
+function cancelCrop(){
+  exitCropMode();
+}
+
+function confirmCrop(){
+  const {x,y,w,h}=cropRect;
+  if(w<5||h<5){exitCropMode();return;}
+  exitCropMode();
+  // 執行裁切
   const scaleX=imgW/drawCanvas.width;
   const scaleY=imgH/drawCanvas.height;
-  const imgSnap=ctx.getImageData(cx,cy,cw,ch);
+  const imgSnap=ctx.getImageData(x,y,w,h);
   const tmp=document.createElement('canvas');
-  tmp.width=Math.round(cw*scaleX);tmp.height=Math.round(ch*scaleY);
+  tmp.width=Math.round(w*scaleX);tmp.height=Math.round(h*scaleY);
   const tc=tmp.getContext('2d');
-  tc.drawImage(baseImg,cx*scaleX,cy*scaleY,cw*scaleX,ch*scaleY,0,0,tmp.width,tmp.height);
+  tc.drawImage(baseImg,x*scaleX,y*scaleY,w*scaleX,h*scaleY,0,0,tmp.width,tmp.height);
   cropHistory={
     imgSrc:baseImg.src,imgW,imgH,dispW,dispH,
     drawW:drawCanvas.width,drawH:drawCanvas.height,
@@ -765,27 +813,184 @@ function doCrop(cx,cy,cw,ch){
   };
   baseImg.onload=()=>{
     imgW=tmp.width;imgH=tmp.height;
-    dispW=cw;dispH=ch;
-    baseImg.style.width=cw+'px';baseImg.style.height=ch+'px';
-    drawCanvas.width=cw;drawCanvas.height=ch;
-    penCanvas.width=cw;penCanvas.height=ch;
+    dispW=w;dispH=h;
+    baseImg.style.width=w+'px';baseImg.style.height=h+'px';
+    drawCanvas.width=w;drawCanvas.height=h;
+    penCanvas.width=w;penCanvas.height=h;
+    cropCv.width=w;cropCv.height=h;
     ctx.putImageData(imgSnap,0,0);
     snapshots=[];saveSnap();
   };
   baseImg.src=tmp.toDataURL();
 }
 
+function getCropHandles(){
+  const {x,y,w,h}=cropRect;
+  return{
+    tl:{x,y}, tc:{x:x+w/2,y}, tr:{x:x+w,y},
+    ml:{x,y:y+h/2},             mr:{x:x+w,y:y+h/2},
+    bl:{x,y:y+h}, bc:{x:x+w/2,y:y+h}, br:{x:x+w,y:y+h}
+  };
+}
+
+function renderCropOverlay(){
+  const cw=cropCv.width,ch=cropCv.height;
+  cctx.clearRect(0,0,cw,ch);
+  const {x,y,w,h}=cropRect;
+
+  // 遮罩
+  cctx.fillStyle='rgba(0,0,0,0.5)';
+  cctx.fillRect(0,0,cw,ch);
+  cctx.clearRect(x,y,w,h);
+
+  // 框線
+  cctx.strokeStyle='#fff';
+  cctx.lineWidth=1.5/zoomLevel;
+  cctx.strokeRect(x,y,w,h);
+
+  // 三等分格線
+  cctx.strokeStyle='rgba(255,255,255,0.35)';
+  cctx.lineWidth=0.8/zoomLevel;
+  cctx.beginPath();
+  cctx.moveTo(x+w/3,y);cctx.lineTo(x+w/3,y+h);
+  cctx.moveTo(x+w*2/3,y);cctx.lineTo(x+w*2/3,y+h);
+  cctx.moveTo(x,y+h/3);cctx.lineTo(x+w,y+h/3);
+  cctx.moveTo(x,y+h*2/3);cctx.lineTo(x+w,y+h*2/3);
+  cctx.stroke();
+
+  // 控制點
+  const hr=HANDLE_R/zoomLevel;
+  const handles=getCropHandles();
+  Object.values(handles).forEach(pt=>{
+    cctx.fillStyle='#fff';
+    cctx.strokeStyle='rgba(0,0,0,0.5)';
+    cctx.lineWidth=1/zoomLevel;
+    cctx.beginPath();cctx.arc(pt.x,pt.y,hr,0,Math.PI*2);
+    cctx.fill();cctx.stroke();
+  });
+}
+
+function positionCropConfirm(){
+  const {x,y,h}=cropRect;
+  const btnY=(y+h)*zoomLevel+panY+8;
+  const btnX=x*zoomLevel+panX;
+  cropConfirm.style.display='flex';
+  cropConfirm.style.left=btnX+'px';
+  cropConfirm.style.top=btnY+'px';
+}
+
+function hitCropHandle(px,py){
+  const hr=(HANDLE_R+3)/zoomLevel;
+  const handles=getCropHandles();
+  for(const[k,pt] of Object.entries(handles)){
+    if(Math.abs(px-pt.x)<hr && Math.abs(py-pt.y)<hr) return k;
+  }
+  // 框內拖曳 = move
+  const {x,y,w,h}=cropRect;
+  if(px>x&&px<x+w&&py>y&&py<y+h) return 'move';
+  return null;
+}
+
+function getCropCursor(handle){
+  const map={tl:'nwse-resize',br:'nwse-resize',tr:'nesw-resize',bl:'nesw-resize',
+             tc:'ns-resize',bc:'ns-resize',ml:'ew-resize',mr:'ew-resize',move:'move'};
+  return map[handle]||'default';
+}
+
+// 裁切框的滑鼠事件掛在 canvas-area 上（因為 draw-canvas pointerEvents 關掉了）
+const caEl=document.getElementById('canvas-area');
+
+caEl.addEventListener('mousedown',e=>{
+  if(!cropActive||spaceDown) return;
+  const p=getCropPos(e);
+  const h=hitCropHandle(p.x,p.y);
+  if(!h) return;
+  cropDragHandle=h;
+  cropDragStart={x:p.x,y:p.y};
+  cropRectStart={...cropRect};
+  e.stopPropagation();
+});
+
+caEl.addEventListener('mousemove',e=>{
+  if(!cropActive) return;
+  const p=getCropPos(e);
+  if(!cropDragHandle){
+    const h=hitCropHandle(p.x,p.y);
+    cropCv.style.cursor=h?getCropCursor(h):'default';
+    return;
+  }
+  const dx=p.x-cropDragStart.x, dy=p.y-cropDragStart.y;
+  let {x,y,w,h: rh}=cropRectStart;
+  const minS=20/zoomLevel;
+  const maxW=drawCanvas.width, maxH=drawCanvas.height;
+
+  if(cropDragHandle==='move'){
+    x=Math.max(0,Math.min(maxW-w, x+dx));
+    y=Math.max(0,Math.min(maxH-rh, y+dy));
+  } else {
+    if(cropDragHandle.includes('l')){ const nx=Math.min(x+w-minS,x+dx); w=w-(nx-x); x=nx; }
+    if(cropDragHandle.includes('r')){ w=Math.max(minS,w+dx); }
+    if(cropDragHandle.includes('t')){ const ny=Math.min(y+rh-minS,y+dy); rh=rh-(ny-y); y=ny; }
+    if(cropDragHandle.includes('b')){ rh=Math.max(minS,rh+dy); }
+    // 邊界限制
+    if(x<0){w+=x;x=0;} if(y<0){rh+=y;y=0;}
+    if(x+w>maxW) w=maxW-x;
+    if(y+rh>maxH) rh=maxH-y;
+  }
+  cropRect={x,y,w,h:rh};
+  renderCropOverlay();
+  positionCropConfirm();
+});
+
+caEl.addEventListener('mouseup',()=>{ cropDragHandle=null; });
+
+function getCropPos(e){
+  const wr=canvasWrap.getBoundingClientRect();
+  return{
+    x:(e.clientX-wr.left)/zoomLevel,
+    y:(e.clientY-wr.top)/zoomLevel
+  };
+}
+
 /* ===================== 匯出 ===================== */
 function exportImg(){
   if(!imgW) return;
+  const sizeMode=document.getElementById('export-size').value;
+
+  // 目標像素：依 ppi 計算（框框 7cm 高 × 6cm 寬）
+  // 1 inch = 2.54 cm
+  let targetW, targetH;
+  if(sizeMode==='standard'){
+    // 150 ppi：6cm×150/2.54 ≈ 354px 寬，7cm×150/2.54 ≈ 413px 高
+    const ppi=150;
+    targetW=Math.round(6/2.54*ppi);  // 354
+    targetH=Math.round(7/2.54*ppi);  // 413
+  } else if(sizeMode==='large'){
+    // 200 ppi
+    const ppi=200;
+    targetW=Math.round(6/2.54*ppi);  // 472
+    targetH=Math.round(7/2.54*ppi);  // 551
+  } else {
+    // 原始尺寸
+    targetW=imgW; targetH=imgH;
+  }
+
+  // 維持原始長寬比，縮放到 target 範圍內
+  const srcW=drawCanvas.width, srcH=drawCanvas.height;
+  const ratio=Math.min(targetW/srcW, targetH/srcH);
+  // 原始尺寸模式直接用 imgW/imgH，其他才縮放
+  const outW = sizeMode==='original' ? imgW : Math.round(srcW*ratio);
+  const outH = sizeMode==='original' ? imgH : Math.round(srcH*ratio);
+
   const out=document.createElement('canvas');
-  out.width=drawCanvas.width;out.height=drawCanvas.height;
+  out.width=outW; out.height=outH;
   const oc=out.getContext('2d');
-  oc.drawImage(baseImg,0,0,drawCanvas.width,drawCanvas.height);
-  oc.drawImage(drawCanvas,0,0);
+  oc.drawImage(baseImg,0,0,outW,outH);
+  oc.drawImage(drawCanvas,0,0,outW,outH);
+
   const link=document.createElement('a');
   link.download='qc_annotated.jpg';
-  link.href=out.toDataURL('image/jpeg',0.95);
+  link.href=out.toDataURL('image/jpeg',0.92);
   link.click();
 }
 </script>
