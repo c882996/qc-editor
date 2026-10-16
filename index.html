@@ -71,6 +71,10 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
   </button>
   <input type="file" id="file-inp" accept="image/*">
   <div class="sep"></div>
+  <button class="tool-btn" id="btn-select" onclick="setTool('select')">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-7 1-4 7z"/></svg>
+    選取
+  </button>
   <button class="tool-btn active" id="btn-pen" onclick="setTool('pen')">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
     畫筆
@@ -127,8 +131,8 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
   </button>
   <div style="display:flex;align-items:center;gap:4px;margin-left:auto;">
     <select id="export-size" style="font-size:12px;padding:4px 6px;border:1px solid #3d6b3d;border-radius:6px;background:#2e3e2e;color:#7ec87e;cursor:pointer;">
-      <option value="standard">符合格子 (7×6cm)</option>
-      <option value="large">大圖 2x (列印清晰)</option>
+      <option value="standard" selected>列印用 (150dpi)</option>
+      <option value="large">高清列印 (300dpi)</option>
       <option value="original">原始尺寸</option>
     </select>
     <button class="tool-btn" onclick="exportImg()" style="background:#2e3e2e;border-color:#3d6b3d;color:#7ec87e">
@@ -227,103 +231,125 @@ input[type=number]{width:46px;font-size:12px;text-align:center;border:1px solid 
 <!-- 縮放提示 -->
 <div id="zoom-indicator" style="position:fixed;bottom:14px;right:16px;background:rgba(0,0,0,0.7);color:#ccc;font-size:12px;padding:5px 12px;border-radius:16px;pointer-events:none;display:none;z-index:200;">100%</div>
 
-<script>
-/* ===================== 基礎變數 ===================== */
-const fileInp=document.getElementById('file-inp');
-const baseImg=document.getElementById('base-img');
-const canvasWrap=document.getElementById('canvas-wrap');
-const drawCanvas=document.getElementById('draw-canvas');
-const penCanvas=document.getElementById('pen-canvas');
-const uploadZone=document.getElementById('upload-zone');
-const ctx=drawCanvas.getContext('2d');
-const pctx=penCanvas.getContext('2d');
-let tool='pen',drawing=false,startX=0,startY=0;
-let snapshots=[],imgW=0,imgH=0,dispW=0,dispH=0;
-let textInput=null;
-let lastPenX=0,lastPenY=0;
-let cropHistory=null;
 
-/* ===================== 縮放 & 平移 ===================== */
+<script>
+/* ============================================================
+   QC 標注編輯器 — 物件式架構
+   每個標注存為物件，可選取、移動、刪除
+   ============================================================ */
+
+/* ---------- DOM ---------- */
+const fileInp   = document.getElementById('file-inp');
+const baseImg   = document.getElementById('base-img');
+const canvasWrap= document.getElementById('canvas-wrap');
+const drawCanvas= document.getElementById('draw-canvas');
+const penCanvas = document.getElementById('pen-canvas');
+const uploadZone= document.getElementById('upload-zone');
+const ctx  = drawCanvas.getContext('2d');
+const pctx = penCanvas.getContext('2d');
+
+/* ---------- 圖片狀態 ---------- */
+let imgW=0, imgH=0, dispW=0, dispH=0;
+
+/* ---------- 工具 ---------- */
+let tool = 'pen';
+
+function setTool(t){
+  if(tool==='bezier' && t!=='bezier') cancelBezier();
+  if(tool==='crop'   && t!=='crop')   cancelCrop();
+  if(tool==='select' && t!=='select') deselectAll();
+  tool = t;
+  ['pen','bezier','circle','arrow','text','crop','fill','select'].forEach(id=>{
+    const b=document.getElementById('btn-'+id);
+    if(b) b.classList.toggle('active', id===t);
+  });
+  drawCanvas.style.cursor = t==='text'?'text': t==='select'?'default' :'crosshair';
+  document.getElementById('pen-hint').style.display         = t==='bezier'?'block':'none';
+  document.getElementById('pen-guide-section').style.display= t==='bezier'?'block':'none';
+  if(t==='crop') enterCropMode();
+}
+
+function getColor()     { return document.getElementById('draw-color').value; }
+function getBrush()     { return parseInt(document.getElementById('brush-size').value); }
+function getFontSize()  { return parseInt(document.getElementById('font-size-inp').value); }
+function getOpacity()   { return parseInt(document.getElementById('opacity-range').value)/100; }
+function getFontWeight(){ return document.getElementById('font-weight-inp').value; }
+
+document.getElementById('opacity-range').addEventListener('input',function(){
+  document.getElementById('opacity-val').textContent = this.value+'%';
+});
+
+/* ---------- 縮放 & 平移 ---------- */
 let zoomLevel=1;
 const ZOOM_MIN=0.25, ZOOM_MAX=8, ZOOM_STEP=0.15;
 let zoomHideTimer=null;
-let panX=16, panY=16;           // canvas-wrap 左上角位置
-let isPanning=false;
-let spaceDown=false;
-let panStartX=0, panStartY=0;
-let panOriginX=0, panOriginY=0;
+let panX=16, panY=16;
+let isPanning=false, spaceDown=false;
+let panStartX=0, panStartY=0, panOriginX=0, panOriginY=0;
 
 function applyTransform(){
-  canvasWrap.style.left=panX+'px';
-  canvasWrap.style.top=panY+'px';
-  canvasWrap.style.transform=`scale(${zoomLevel})`;
-  const ind=document.getElementById('zoom-indicator');
-  ind.textContent=Math.round(zoomLevel*100)+'%';
-  ind.style.display='block';
+  canvasWrap.style.left      = panX+'px';
+  canvasWrap.style.top       = panY+'px';
+  canvasWrap.style.transform = `scale(${zoomLevel})`;
+  const ind = document.getElementById('zoom-indicator');
+  ind.textContent    = Math.round(zoomLevel*100)+'%';
+  ind.style.display  = 'block';
   clearTimeout(zoomHideTimer);
-  zoomHideTimer=setTimeout(()=>{ ind.style.display='none'; },1200);
+  zoomHideTimer = setTimeout(()=>{ ind.style.display='none'; }, 1200);
 }
-function applyZoom(){ applyTransform(); }
 
-// Alt+滾輪縮放（以滑鼠位置為中心）
 document.getElementById('canvas-area').addEventListener('wheel',e=>{
   if(!e.altKey) return;
   e.preventDefault();
-  const ca=document.getElementById('canvas-area');
-  const caRect=ca.getBoundingClientRect();
-  const mx=e.clientX-caRect.left;
-  const my=e.clientY-caRect.top;
-  // 滑鼠在 canvas 上的比例位置
-  const beforeX=(mx-panX)/zoomLevel;
-  const beforeY=(my-panY)/zoomLevel;
-  const delta=e.deltaY>0?-ZOOM_STEP:ZOOM_STEP;
-  zoomLevel=Math.min(ZOOM_MAX,Math.max(ZOOM_MIN,zoomLevel+delta));
-  // 保持滑鼠指向的點不動
-  panX=mx-beforeX*zoomLevel;
-  panY=my-beforeY*zoomLevel;
+  const caRect = document.getElementById('canvas-area').getBoundingClientRect();
+  const mx = e.clientX-caRect.left, my = e.clientY-caRect.top;
+  const bx=(mx-panX)/zoomLevel, by=(my-panY)/zoomLevel;
+  zoomLevel = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomLevel+(e.deltaY>0?-ZOOM_STEP:ZOOM_STEP)));
+  panX = mx-bx*zoomLevel;
+  panY = my-by*zoomLevel;
   applyTransform();
+  if(cropActive) positionCropConfirm();
 },{passive:false});
 
-// 鍵盤快捷：Space 平移 + 鋼筆快捷 + Ctrl+Z 復原
 document.addEventListener('keydown',e=>{
   if(e.target.matches('input,textarea,select')) return;
-  if((e.ctrlKey||e.metaKey) && e.key==='z'){
-    e.preventDefault();
-    if(tool==='bezier' && bzPoints.length>0){
-      bzPoints.pop();
-      renderBezierPreview(bzMousePos.x, bzMousePos.y);
-    } else {
-      undoLast();
-    }
-    return;
-  }
   if(e.code==='Space' && !e.repeat){
-    e.preventDefault();
-    spaceDown=true;
+    e.preventDefault(); spaceDown=true;
     document.getElementById('canvas-area').style.cursor='grab';
     drawCanvas.style.cursor='grab';
   }
+  if((e.ctrlKey||e.metaKey) && e.key==='z'){
+    e.preventDefault();
+    if(tool==='bezier' && bzPoints.length>0){
+      bzPoints.pop(); renderBezierPreview(bzMousePos.x, bzMousePos.y);
+    } else { undoLast(); }
+    return;
+  }
   if(tool==='bezier'){
-    if(e.key==='Enter'){e.preventDefault();closeBezierPath();}
-    if(e.key==='Escape'){e.preventDefault();cancelBezier();}
+    if(e.key==='Enter'){ e.preventDefault(); closeBezierPath(); }
+    if(e.key==='Escape'){ e.preventDefault(); cancelBezier(); }
   }
   if(tool==='crop'){
-    if(e.key==='Enter'){e.preventDefault();confirmCrop();}
-    if(e.key==='Escape'){e.preventDefault();cancelCrop();setTool('pen');}
+    if(e.key==='Enter'){ e.preventDefault(); confirmCrop(); }
+    if(e.key==='Escape'){ e.preventDefault(); cancelCrop(); setTool('pen'); }
+  }
+  if(tool==='select'){
+    if(e.key==='Delete'||e.key==='Backspace'){
+      e.preventDefault(); deleteSelected();
+    }
+    if(e.key==='Escape'){ deselectAll(); }
   }
 });
 document.addEventListener('keyup',e=>{
   if(e.code==='Space'){
-    spaceDown=false;
-    isPanning=false;
+    spaceDown=false; isPanning=false;
     document.getElementById('canvas-area').style.cursor='default';
-    drawCanvas.style.cursor= tool==='text'?'text':'crosshair';
+    drawCanvas.style.cursor = tool==='text'?'text':'crosshair';
   }
 });
 
-// 在 canvas-area 上拖曳平移
 document.getElementById('canvas-area').addEventListener('mousedown',e=>{
-  if(spaceDown){
+  if(spaceDown && !cropActive){
     isPanning=true;
     panStartX=e.clientX; panStartY=e.clientY;
     panOriginX=panX; panOriginY=panY;
@@ -334,44 +360,485 @@ document.getElementById('canvas-area').addEventListener('mousedown',e=>{
 });
 document.addEventListener('mousemove',e=>{
   if(!isPanning) return;
-  panX=panOriginX+(e.clientX-panStartX);
-  panY=panOriginY+(e.clientY-panStartY);
+  panX = panOriginX+(e.clientX-panStartX);
+  panY = panOriginY+(e.clientY-panStartY);
   applyTransform();
+  if(cropActive) positionCropConfirm();
 });
-document.addEventListener('mouseup',e=>{
+document.addEventListener('mouseup',()=>{
   if(isPanning){
     isPanning=false;
-    document.getElementById('canvas-area').style.cursor=spaceDown?'grab':'default';
-    drawCanvas.style.cursor=spaceDown?'grab':(tool==='text'?'text':'crosshair');
+    document.getElementById('canvas-area').style.cursor = spaceDown?'grab':'default';
+    drawCanvas.style.cursor = spaceDown?'grab':(tool==='text'?'text':'crosshair');
   }
 });
 
-/* ===================== 工具切換 ===================== */
-function setTool(t){
-  if(tool==='bezier' && t!=='bezier') cancelBezier();
-  if(tool==='crop' && t!=='crop') cancelCrop();
-  tool=t;
-  ['pen','bezier','circle','arrow','text','crop','fill'].forEach(id=>{
-    const b=document.getElementById('btn-'+id);
-    if(b) b.classList.toggle('active',id===t);
-  });
-  drawCanvas.style.cursor=t==='text'?'text':'crosshair';
-  document.getElementById('pen-hint').style.display=t==='bezier'?'block':'none';
-  document.getElementById('pen-guide-section').style.display=t==='bezier'?'block':'none';
-  if(t==='crop') enterCropMode();
+/* ---------- 座標轉換 ---------- */
+function getPos(e){
+  const r = drawCanvas.getBoundingClientRect();
+  return {
+    x: (e.clientX-r.left)/zoomLevel,
+    y: (e.clientY-r.top)/zoomLevel
+  };
 }
 
-function getColor(){return document.getElementById('draw-color').value;}
-function getBrush(){return parseInt(document.getElementById('brush-size').value);}
-function getFontSize(){return parseInt(document.getElementById('font-size-inp').value);}
-function getOpacity(){return parseInt(document.getElementById('opacity-range').value)/100;}
-function getFontWeight(){return document.getElementById('font-weight-inp').value;}
+/* ============================================================
+   物件系統
+   ============================================================ */
+let objects   = [];   // 所有標注物件
+let history   = [];   // undo 快照（存 objects 深拷貝）
+let selectedId= null; // 目前選取的物件 id
+let objIdSeq  = 0;
 
-document.getElementById('opacity-range').addEventListener('input',function(){
-  document.getElementById('opacity-val').textContent=this.value+'%';
+// 畫筆筆劃（仍然用 pixel 方式，但存起來方便復原）
+let strokeObjects = []; // {id, type:'stroke', imageData}
+
+function newId(){ return ++objIdSeq; }
+
+function saveHistory(){
+  history.push(JSON.parse(JSON.stringify(objects)));
+  if(history.length>50) history.shift();
+}
+
+function undoLast(){
+  if(history.length===0) return;
+  objects = history.pop();
+  renderAll();
+  deselectAll();
+}
+
+function clearAll(){
+  saveHistory();
+  objects=[];
+  ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+  deselectAll();
+}
+
+/* ---------- 渲染所有物件到 draw-canvas ---------- */
+function renderAll(){
+  ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+  objects.forEach(o => renderObject(o, false));
+  if(selectedId!==null){
+    const o = objects.find(o=>o.id===selectedId);
+    if(o) drawSelectionHandle(o);
+  }
+}
+
+function renderObject(o, isPreview){
+  ctx.save();
+  ctx.globalAlpha = o.opacity ?? 1;
+
+  if(o.type==='stroke'){
+    ctx.putImageData(o.imageData, 0, 0);
+    ctx.restore(); return;
+  }
+  if(o.type==='circle'){
+    ctx.strokeStyle=o.color; ctx.lineWidth=o.lw;
+    ctx.beginPath();
+    ctx.ellipse(o.cx,o.cy,o.rx,o.ry,0,0,Math.PI*2);
+    ctx.stroke();
+  }
+  if(o.type==='arrow'){
+    drawArrowShape(ctx,o.x1,o.y1,o.x2,o.y2,o.color,o.lw);
+  }
+  if(o.type==='fill'){
+    ctx.fillStyle=o.color;
+    ctx.fillRect(o.x,o.y,o.w,o.h);
+  }
+  if(o.type==='text'){
+    ctx.font=`${o.fw} ${o.fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
+    ctx.fillStyle=o.color;
+    ctx.fillText(o.text, o.x, o.y);
+  }
+  if(o.type==='bezier'){
+    ctx.strokeStyle=o.color; ctx.lineWidth=o.lw;
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.beginPath();
+    ctx.moveTo(o.pts[0].x, o.pts[0].y);
+    for(let i=1;i<o.pts.length;i++){
+      const prev=o.pts[i-1], cur=o.pts[i];
+      ctx.bezierCurveTo(prev.cp2x,prev.cp2y,cur.cp1x,cur.cp1y,cur.x,cur.y);
+    }
+    const last=o.pts[o.pts.length-1], first=o.pts[0];
+    ctx.bezierCurveTo(last.cp2x,last.cp2y,first.cp1x,first.cp1y,first.x,first.y);
+    ctx.closePath();
+    if(o.fill){
+      ctx.fillStyle=o.color;
+      ctx.fill();
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ---------- 選取框 ---------- */
+function drawSelectionHandle(o){
+  const bb = getBBox(o);
+  if(!bb) return;
+  const pad = 6/zoomLevel;
+  ctx.save();
+  ctx.strokeStyle='#4af';
+  ctx.lineWidth=1.5/zoomLevel;
+  ctx.setLineDash([4/zoomLevel,3/zoomLevel]);
+  ctx.strokeRect(bb.x-pad, bb.y-pad, bb.w+pad*2, bb.h+pad*2);
+  ctx.setLineDash([]);
+  // 四角控制點
+  [[bb.x-pad,bb.y-pad],[bb.x+bb.w+pad,bb.y-pad],
+   [bb.x-pad,bb.y+bb.h+pad],[bb.x+bb.w+pad,bb.y+bb.h+pad]].forEach(([hx,hy])=>{
+    ctx.fillStyle='#fff'; ctx.strokeStyle='#4af'; ctx.lineWidth=1/zoomLevel;
+    ctx.beginPath(); ctx.arc(hx,hy,4/zoomLevel,0,Math.PI*2);
+    ctx.fill(); ctx.stroke();
+  });
+  ctx.restore();
+}
+
+/* ---------- 取得物件 BBox ---------- */
+function getBBox(o){
+  if(o.type==='circle')  return {x:o.cx-o.rx,y:o.cy-o.ry,w:o.rx*2,h:o.ry*2};
+  if(o.type==='arrow')   return {x:Math.min(o.x1,o.x2),y:Math.min(o.y1,o.y2),w:Math.abs(o.x2-o.x1)||10,h:Math.abs(o.y2-o.y1)||10};
+  if(o.type==='fill')    return {x:o.x,y:o.y,w:o.w,h:o.h};
+  if(o.type==='text'){
+    ctx.font=`${o.fw} ${o.fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
+    const tw=ctx.measureText(o.text).width;
+    return {x:o.x,y:o.y-o.fs,w:tw,h:o.fs*1.2};
+  }
+  if(o.type==='bezier'){
+    const xs=o.pts.map(p=>p.x), ys=o.pts.map(p=>p.y);
+    const x=Math.min(...xs),y=Math.min(...ys);
+    return {x,y,w:Math.max(...xs)-x||10,h:Math.max(...ys)-y||10};
+  }
+  if(o.type==='fraction') return {x:o.x,y:o.y,w:o.w,h:o.h};
+  if(o.type==='note')     return {x:o.x,y:o.y,w:o.w,h:o.h};
+  return null;
+}
+
+/* ---------- 點擊命中測試 ---------- */
+function hitTest(o, px, py){
+  const bb=getBBox(o);
+  if(!bb) return false;
+  const pad=8/zoomLevel;
+  return px>=bb.x-pad && px<=bb.x+bb.w+pad && py>=bb.y-pad && py<=bb.y+bb.h+pad;
+}
+
+function deselectAll(){
+  selectedId=null;
+  renderAll();
+}
+
+function deleteSelected(){
+  if(selectedId===null) return;
+  saveHistory();
+  objects = objects.filter(o=>o.id!==selectedId);
+  selectedId=null;
+  renderAll();
+}
+
+/* ============================================================
+   選取工具
+   ============================================================ */
+let selectDragging=false;
+let selectDragStart={x:0,y:0};
+let selectObjStart={};  // 拖曳開始時物件的位置
+
+function onSelectMousedown(p){
+  // 先檢查是否點到已選取物件（準備拖曳）
+  if(selectedId!==null){
+    const o=objects.find(o=>o.id===selectedId);
+    if(o && hitTest(o,p.x,p.y)){
+      selectDragging=true;
+      selectDragStart={x:p.x,y:p.y};
+      selectObjStart=JSON.parse(JSON.stringify(o));
+      saveHistory();
+      return;
+    }
+  }
+  // 嘗試選取其他物件（從最上層往下找）
+  deselectAll();
+  for(let i=objects.length-1;i>=0;i--){
+    const o=objects[i];
+    if(o.type==='stroke') continue; // 筆劃不支援選取
+    if(hitTest(o,p.x,p.y)){
+      selectedId=o.id;
+      renderAll();
+      return;
+    }
+  }
+}
+
+function onSelectMousemove(p){
+  if(!selectDragging || selectedId===null) return;
+  const dx=p.x-selectDragStart.x, dy=p.y-selectDragStart.y;
+  const o=objects.find(o=>o.id===selectedId);
+  const s=selectObjStart;
+  if(!o) return;
+  if(o.type==='circle')  { o.cx=s.cx+dx; o.cy=s.cy+dy; }
+  if(o.type==='arrow')   { o.x1=s.x1+dx;o.y1=s.y1+dy;o.x2=s.x2+dx;o.y2=s.y2+dy; }
+  if(o.type==='fill')    { o.x=s.x+dx; o.y=s.y+dy; }
+  if(o.type==='text')    { o.x=s.x+dx; o.y=s.y+dy; }
+  if(o.type==='fraction'){ o.x=s.x+dx; o.y=s.y+dy; }
+  if(o.type==='note')    { o.x=s.x+dx; o.y=s.y+dy; }
+  if(o.type==='bezier'){
+    o.pts=s.pts.map(pt=>({
+      ...pt, x:pt.x+dx,y:pt.y+dy,
+      cp1x:pt.cp1x+dx,cp1y:pt.cp1y+dy,
+      cp2x:pt.cp2x+dx,cp2y:pt.cp2y+dy
+    }));
+  }
+  renderAll();
+}
+
+function onSelectMouseup(){
+  selectDragging=false;
+}
+
+/* ============================================================
+   畫布事件總入口
+   ============================================================ */
+let drawing=false, startX=0, startY=0;
+let lastPenX=0, lastPenY=0;
+let penImageDataBefore=null; // 畫筆開始前快照
+
+drawCanvas.addEventListener('mousedown',e=>{
+  if(!imgW || spaceDown || cropActive) return;
+  const p=getPos(e);
+  startX=p.x; startY=p.y;
+
+  if(tool==='select'){ onSelectMousedown(p); return; }
+  if(tool==='text')  { showTextInput(startX,startY); return; }
+  if(tool==='bezier'){ onBezierMousedown(p); return; }
+
+  drawing=true;
+  if(tool==='pen'){
+    lastPenX=startX; lastPenY=startY;
+    penImageDataBefore=ctx.getImageData(0,0,drawCanvas.width,drawCanvas.height);
+  }
+  if(tool==='circle'||tool==='arrow'||tool==='fill'){
+    // 預覽用：存當前狀態
+    penImageDataBefore=ctx.getImageData(0,0,drawCanvas.width,drawCanvas.height);
+  }
 });
 
-/* ===================== 載入圖片 ===================== */
+drawCanvas.addEventListener('mousemove',e=>{
+  const p=getPos(e);
+  bzMousePos={x:p.x,y:p.y};
+
+  if(tool==='select'){ onSelectMousemove(p); return; }
+  if(tool==='bezier'){ onBezierMousemove(p); return; }
+  if(!drawing) return;
+
+  if(tool==='pen'){
+    ctx.globalAlpha=getOpacity();
+    ctx.strokeStyle=getColor(); ctx.lineWidth=getBrush();
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.beginPath(); ctx.moveTo(lastPenX,lastPenY); ctx.lineTo(p.x,p.y); ctx.stroke();
+    ctx.globalAlpha=1;
+    lastPenX=p.x; lastPenY=p.y;
+  }
+  if(tool==='circle'||tool==='arrow'||tool==='fill'){
+    // 預覽
+    ctx.putImageData(penImageDataBefore,0,0);
+    const dx=p.x-startX, dy=p.y-startY;
+    ctx.globalAlpha=getOpacity();
+    ctx.strokeStyle=getColor(); ctx.lineWidth=getBrush();
+    if(tool==='circle'){
+      ctx.beginPath();
+      ctx.ellipse(startX+dx/2,startY+dy/2,Math.abs(dx/2),Math.abs(dy/2),0,0,Math.PI*2);
+      ctx.stroke();
+    } else if(tool==='arrow'){
+      drawArrowShape(ctx,startX,startY,p.x,p.y,getColor(),getBrush());
+    } else if(tool==='fill'){
+      ctx.fillStyle=getColor();
+      ctx.fillRect(startX,startY,dx,dy);
+    }
+    ctx.globalAlpha=1;
+  }
+});
+
+drawCanvas.addEventListener('mouseup',e=>{
+  const p=getPos(e);
+  if(tool==='select'){ onSelectMouseup(); return; }
+  if(tool==='bezier'){ onBezierMouseup(p); return; }
+  if(!drawing) return;
+  drawing=false;
+
+  if(tool==='pen'){
+    // 存為筆劃物件（imageData diff）
+    const afterData=ctx.getImageData(0,0,drawCanvas.width,drawCanvas.height);
+    saveHistory();
+    objects.push({id:newId(), type:'stroke', imageData:afterData});
+  }
+  if(tool==='circle'){
+    const dx=p.x-startX, dy=p.y-startY;
+    if(Math.abs(dx)<3&&Math.abs(dy)<3) return;
+    saveHistory();
+    ctx.putImageData(penImageDataBefore,0,0);
+    const o={id:newId(),type:'circle',
+      cx:startX+dx/2,cy:startY+dy/2,rx:Math.abs(dx/2),ry:Math.abs(dy/2),
+      color:getColor(),lw:getBrush(),opacity:getOpacity()};
+    objects.push(o);
+    renderAll();
+  }
+  if(tool==='arrow'){
+    if(Math.abs(p.x-startX)<3&&Math.abs(p.y-startY)<3) return;
+    saveHistory();
+    ctx.putImageData(penImageDataBefore,0,0);
+    objects.push({id:newId(),type:'arrow',
+      x1:startX,y1:startY,x2:p.x,y2:p.y,
+      color:getColor(),lw:getBrush(),opacity:getOpacity()});
+    renderAll();
+  }
+  if(tool==='fill'){
+    const dx=p.x-startX, dy=p.y-startY;
+    if(Math.abs(dx)<3&&Math.abs(dy)<3) return;
+    saveHistory();
+    ctx.putImageData(penImageDataBefore,0,0);
+    objects.push({id:newId(),type:'fill',
+      x:startX,y:startY,w:dx,h:dy,
+      color:getColor(),opacity:getOpacity()});
+    renderAll();
+  }
+});
+
+drawCanvas.addEventListener('mouseleave',()=>{
+  if(tool==='bezier'){ bzDragging=false; renderBezierPreview(null,null); return; }
+  if(drawing && tool==='pen'){
+    drawing=false;
+    const afterData=ctx.getImageData(0,0,drawCanvas.width,drawCanvas.height);
+    saveHistory();
+    objects.push({id:newId(),type:'stroke',imageData:afterData});
+  }
+});
+
+// Touch
+drawCanvas.addEventListener('touchstart',e=>{e.preventDefault();const t=e.touches[0];drawCanvas.dispatchEvent(new MouseEvent('mousedown',{clientX:t.clientX,clientY:t.clientY}));},{passive:false});
+drawCanvas.addEventListener('touchmove', e=>{e.preventDefault();const t=e.touches[0];drawCanvas.dispatchEvent(new MouseEvent('mousemove',{clientX:t.clientX,clientY:t.clientY}));},{passive:false});
+drawCanvas.addEventListener('touchend',  e=>{drawCanvas.dispatchEvent(new MouseEvent('mouseup',{}));},{passive:false});
+
+/* ============================================================
+   箭頭繪製
+   ============================================================ */
+function drawArrowShape(c,x1,y1,x2,y2,color,lw){
+  c.strokeStyle=color; c.fillStyle=color; c.lineWidth=lw;
+  c.beginPath(); c.moveTo(x1,y1); c.lineTo(x2,y2); c.stroke();
+  const angle=Math.atan2(y2-y1,x2-x1), len=14+lw;
+  c.beginPath(); c.moveTo(x2,y2);
+  c.lineTo(x2-len*Math.cos(angle-0.38),y2-len*Math.sin(angle-0.38));
+  c.lineTo(x2-len*Math.cos(angle+0.38),y2-len*Math.sin(angle+0.38));
+  c.closePath(); c.fill();
+}
+
+/* ============================================================
+   文字工具
+   ============================================================ */
+let textInput=null;
+function showTextInput(x,y){
+  if(textInput) textInput.remove();
+  const fs=getFontSize();
+  const dispFs=Math.round(fs*zoomLevel);
+  const inp=document.createElement('input');
+  inp.type='text'; inp.placeholder='輸入文字… Enter確認';
+  inp.style.cssText=`position:absolute;left:${x*zoomLevel}px;top:${y*zoomLevel-dispFs*0.6}px;font-size:${dispFs}px;color:${getColor()};background:rgba(0,0,0,0.65);border:1.5px dashed rgba(255,255,255,0.7);outline:none;padding:3px 8px;z-index:100;min-width:100px;border-radius:3px;`;
+  canvasWrap.appendChild(inp); inp.focus(); textInput=inp;
+  inp.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){ e.preventDefault(); commitText(inp,x,y,fs); }
+    if(e.key==='Escape'){ inp.remove(); textInput=null; }
+  });
+}
+function commitText(inp,x,y,fs){
+  const val=inp.value.trim();
+  if(val){
+    saveHistory();
+    objects.push({id:newId(),type:'text',
+      text:val,x,y:y+fs*0.35,fs,fw:getFontWeight(),
+      color:getColor(),opacity:getOpacity()});
+    renderAll();
+  }
+  inp.remove(); textInput=null;
+}
+
+/* ============================================================
+   鋼筆工具
+   ============================================================ */
+let bzPoints=[], bzDragging=false, bzMousePos={x:0,y:0};
+let bzClickTimer=null;
+
+function cancelBezier(){
+  bzPoints=[]; bzDragging=false;
+  pctx.clearRect(0,0,penCanvas.width,penCanvas.height);
+}
+function closeBezierPath(){
+  if(bzPoints.length<2){ cancelBezier(); return; }
+  saveHistory();
+  objects.push({id:newId(),type:'bezier',
+    pts:JSON.parse(JSON.stringify(bzPoints)),
+    color:getColor(),lw:getBrush(),opacity:getOpacity(),fill:true});
+  renderAll();
+  cancelBezier();
+}
+
+function onBezierMousedown(p){
+  bzDragging=true;
+  if(bzClickTimer){
+    clearTimeout(bzClickTimer); bzClickTimer=null;
+    bzDragging=false; closeBezierPath(); return;
+  }
+  bzClickTimer=setTimeout(()=>{ bzClickTimer=null; },280);
+  bzPoints.push({x:p.x,y:p.y,cp1x:p.x,cp1y:p.y,cp2x:p.x,cp2y:p.y,hasCp:false});
+}
+function onBezierMousemove(p){
+  if(bzDragging && bzPoints.length>0){
+    const last=bzPoints[bzPoints.length-1];
+    last.cp2x=p.x; last.cp2y=p.y;
+    last.cp1x=2*last.x-p.x; last.cp1y=2*last.y-p.y;
+    last.hasCp=true;
+  }
+  renderBezierPreview(p.x,p.y);
+}
+function onBezierMouseup(p){
+  bzDragging=false; renderBezierPreview(p.x,p.y);
+}
+
+function renderBezierPreview(mouseX,mouseY){
+  pctx.clearRect(0,0,penCanvas.width,penCanvas.height);
+  if(bzPoints.length===0) return;
+  pctx.save();
+  pctx.strokeStyle=getColor(); pctx.lineWidth=Math.max(1,getBrush());
+  pctx.lineCap='round'; pctx.lineJoin='round'; pctx.setLineDash([]);
+  pctx.beginPath(); pctx.moveTo(bzPoints[0].x,bzPoints[0].y);
+  for(let i=1;i<bzPoints.length;i++){
+    const prev=bzPoints[i-1],cur=bzPoints[i];
+    pctx.bezierCurveTo(prev.cp2x,prev.cp2y,cur.cp1x,cur.cp1y,cur.x,cur.y);
+  }
+  pctx.stroke();
+  if(mouseX!==null){
+    const last=bzPoints[bzPoints.length-1];
+    pctx.beginPath(); pctx.setLineDash([4,4]); pctx.globalAlpha=0.5;
+    pctx.moveTo(last.x,last.y);
+    pctx.bezierCurveTo(last.cp2x,last.cp2y,mouseX,mouseY,mouseX,mouseY);
+    pctx.stroke(); pctx.setLineDash([]); pctx.globalAlpha=1;
+  }
+  bzPoints.forEach((pt,i)=>{
+    if(pt.hasCp){
+      pctx.beginPath(); pctx.setLineDash([3,3]);
+      pctx.strokeStyle='rgba(255,255,255,0.35)'; pctx.lineWidth=1;
+      pctx.moveTo(pt.cp1x,pt.cp1y); pctx.lineTo(pt.x,pt.y);
+      pctx.moveTo(pt.x,pt.y); pctx.lineTo(pt.cp2x,pt.cp2y); pctx.stroke();
+      pctx.setLineDash([]);
+      pctx.fillStyle='rgba(255,200,80,0.9)';
+      [[pt.cp1x,pt.cp1y],[pt.cp2x,pt.cp2y]].forEach(([cx,cy])=>{
+        pctx.beginPath(); pctx.arc(cx,cy,2.5,0,Math.PI*2); pctx.fill();
+      });
+    }
+    pctx.strokeStyle=i===0?'#4cff88':'rgba(255,255,255,0.9)';
+    pctx.lineWidth=1.5; pctx.fillStyle=i===0?'rgba(76,255,136,0.25)':'rgba(255,255,255,0.15)';
+    pctx.beginPath(); pctx.arc(pt.x,pt.y,3,0,Math.PI*2); pctx.fill(); pctx.stroke();
+  });
+  pctx.restore();
+}
+
+/* ============================================================
+   載入圖片
+   ============================================================ */
 function loadImage(file){
   if(!file||!file.type.startsWith('image/')) return;
   const url=URL.createObjectURL(file);
@@ -383,611 +850,262 @@ function loadImage(file){
     dispW=Math.round(imgW*scale); dispH=Math.round(imgH*scale);
     baseImg.style.width=dispW+'px'; baseImg.style.height=dispH+'px';
     drawCanvas.width=dispW; drawCanvas.height=dispH;
-    penCanvas.width=dispW; penCanvas.height=dispH;
-    snapshots=[]; saveSnap();
-    // 置中顯示
-    const ca2=document.getElementById('canvas-area');
-    panX=Math.max(16,(ca2.clientWidth-dispW*zoomLevel)/2);
-    panY=Math.max(16,(ca2.clientHeight-dispH*zoomLevel)/2);
+    penCanvas.width=dispW;  penCanvas.height=dispH;
+    cropCv.width=dispW;     cropCv.height=dispH;
+    objects=[]; history=[]; selectedId=null;
+    panX=Math.max(16,(document.getElementById('canvas-area').clientWidth-dispW*zoomLevel)/2);
+    panY=Math.max(16,(document.getElementById('canvas-area').clientHeight-dispH*zoomLevel)/2);
     uploadZone.style.display='none';
     canvasWrap.style.display='inline-block';
     applyTransform();
+    URL.revokeObjectURL(url);
   };
   baseImg.src=url;
 }
 fileInp.addEventListener('change',e=>loadImage(e.target.files[0]));
-const ca=document.getElementById('canvas-area');
-ca.addEventListener('dragover',e=>e.preventDefault());
-ca.addEventListener('drop',e=>{e.preventDefault();loadImage(e.dataTransfer.files[0]);});
+const caEl=document.getElementById('canvas-area');
+caEl.addEventListener('dragover',e=>e.preventDefault());
+caEl.addEventListener('drop',e=>{e.preventDefault();loadImage(e.dataTransfer.files[0]);});
 
-/* ===================== 快照 ===================== */
-function saveSnap(){
-  snapshots.push(ctx.getImageData(0,0,drawCanvas.width,drawCanvas.height));
-  if(snapshots.length>40) snapshots.shift();
-}
-function undoLast(){
-  if(snapshots.length>1){
-    snapshots.pop();
-    ctx.putImageData(snapshots[snapshots.length-1],0,0);
-  } else if(cropHistory){
-    const h=cropHistory; cropHistory=null;
-    baseImg.onload=()=>{
-      imgW=h.imgW;imgH=h.imgH;dispW=h.dispW;dispH=h.dispH;
-      baseImg.style.width=h.dispW+'px';baseImg.style.height=h.dispH+'px';
-      drawCanvas.width=h.drawW;drawCanvas.height=h.drawH;
-      penCanvas.width=h.drawW;penCanvas.height=h.drawH;
-      snapshots=h.snapshots;
-      ctx.putImageData(snapshots[snapshots.length-1],0,0);
-    };
-    baseImg.src=h.imgSrc;
-  }
-}
-function clearAll(){
-  ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
-  snapshots=[];saveSnap();
-  cancelBezier();
-}
-
-/* ===================== 滑鼠座標 ===================== */
-function getPos(e){
-  const r=drawCanvas.getBoundingClientRect();
-  return{
-    x:(e.clientX-r.left)/zoomLevel,
-    y:(e.clientY-r.top)/zoomLevel
-  };
-}
-
-/* ===================== 鋼筆（貝茲）工具 ===================== */
-// 每個錨點: { x, y, cp1x, cp1y, cp2x, cp2y, hasCp }
-let bzPoints=[];
-let bzDragging=false;  // 目前是否在拖曳控制把手
-let bzDragCp={x:0,y:0}; // 正在拖曳的 cp2
-let bzMousePos={x:0,y:0};
-
-function cancelBezier(){
-  bzPoints=[];
-  bzDragging=false;
-  pctx.clearRect(0,0,penCanvas.width,penCanvas.height);
-}
-
-function closeBezierPath(){
-  if(bzPoints.length<2){ cancelBezier(); return; }
-  // 畫到 draw-canvas，然後詢問填色
-  commitBezierToCanvas(true);
-}
-
-function commitBezierToCanvas(doFill){
-  if(bzPoints.length<2) return;
-  ctx.save();
-  ctx.globalAlpha=getOpacity();
-  ctx.strokeStyle=getColor();
-  ctx.lineWidth=getBrush();
-  ctx.lineCap='round';
-  ctx.lineJoin='round';
-  ctx.beginPath();
-  ctx.moveTo(bzPoints[0].x, bzPoints[0].y);
-  for(let i=1;i<bzPoints.length;i++){
-    const prev=bzPoints[i-1];
-    const cur=bzPoints[i];
-    ctx.bezierCurveTo(
-      prev.cp2x, prev.cp2y,
-      cur.cp1x,  cur.cp1y,
-      cur.x,     cur.y
-    );
-  }
-  if(doFill){
-    // 封閉回第一點
-    const prev=bzPoints[bzPoints.length-1];
-    const first=bzPoints[0];
-    ctx.bezierCurveTo(prev.cp2x,prev.cp2y,first.cp1x,first.cp1y,first.x,first.y);
-    ctx.closePath();
-    ctx.fillStyle=getColor();
-    ctx.fill();
-  }
-  ctx.stroke();
-  ctx.restore();
-  saveSnap();
-  cancelBezier();
-}
-
-function renderBezierPreview(mouseX, mouseY){
-  pctx.clearRect(0,0,penCanvas.width,penCanvas.height);
-  if(bzPoints.length===0) return;
-
-  pctx.save();
-  pctx.strokeStyle=getColor();
-  pctx.lineWidth=Math.max(1,getBrush());
-  pctx.lineCap='round';
-  pctx.lineJoin='round';
-  pctx.setLineDash([]);
-
-  // 已確認的路徑段
-  pctx.beginPath();
-  pctx.moveTo(bzPoints[0].x, bzPoints[0].y);
-  for(let i=1;i<bzPoints.length;i++){
-    const prev=bzPoints[i-1];
-    const cur=bzPoints[i];
-    pctx.bezierCurveTo(prev.cp2x,prev.cp2y,cur.cp1x,cur.cp1y,cur.x,cur.y);
-  }
-  pctx.stroke();
-
-  // 預覽線：從最後一點到滑鼠
-  if(mouseX!==null){
-    const last=bzPoints[bzPoints.length-1];
-    pctx.beginPath();
-    pctx.setLineDash([4,4]);
-    pctx.globalAlpha=0.5;
-    // 若正在拖曳，用即時 cp2；否則從 cp2 做簡單直線
-    pctx.moveTo(last.x, last.y);
-    pctx.bezierCurveTo(last.cp2x,last.cp2y,mouseX,mouseY,mouseX,mouseY);
-    pctx.stroke();
-    pctx.setLineDash([]);
-    pctx.globalAlpha=1;
-  }
-
-  // 畫錨點與控制把手
-  bzPoints.forEach((pt,i)=>{
-    // 控制把手線
-    if(pt.hasCp){
-      pctx.beginPath();
-      pctx.setLineDash([3,3]);
-      pctx.strokeStyle='rgba(255,255,255,0.35)';
-      pctx.lineWidth=1;
-      // cp1
-      pctx.moveTo(pt.cp1x,pt.cp1y);pctx.lineTo(pt.x,pt.y);
-      // cp2
-      pctx.moveTo(pt.x,pt.y);pctx.lineTo(pt.cp2x,pt.cp2y);
-      pctx.stroke();
-      pctx.setLineDash([]);
-      // cp 圓點（小）
-      pctx.fillStyle='rgba(255,200,80,0.9)';
-      [[pt.cp1x,pt.cp1y],[pt.cp2x,pt.cp2y]].forEach(([cx,cy])=>{
-        pctx.beginPath();pctx.arc(cx,cy,2.5,0,Math.PI*2);pctx.fill();
-      });
-    }
-    // 錨點（小）
-    pctx.strokeStyle=i===0?'#4cff88':'rgba(255,255,255,0.9)';
-    pctx.lineWidth=1.5;
-    pctx.fillStyle=i===0?'rgba(76,255,136,0.25)':'rgba(255,255,255,0.15)';
-    pctx.beginPath();pctx.arc(pt.x,pt.y,3,0,Math.PI*2);
-    pctx.fill();pctx.stroke();
-  });
-
-  pctx.restore();
-}
-
-/* ===================== Canvas 事件 ===================== */
-let bzClickTimer=null; // 用來區分單擊 vs 雙擊
-
-drawCanvas.addEventListener('mousedown',e=>{
-  if(!imgW || spaceDown) return;
-  const p=getPos(e);
-  startX=p.x; startY=p.y;
-
-  if(tool==='text'){showTextInput(startX,startY);return;}
-  if(tool==='bezier'){
-    bzDragging=true;
-    // 雙擊偵測：若 100ms 內再次 mousedown，視為雙擊封閉
-    if(bzClickTimer){
-      clearTimeout(bzClickTimer);
-      bzClickTimer=null;
-      bzDragging=false;
-      closeBezierPath();
-      return;
-    }
-    bzClickTimer=setTimeout(()=>{
-      bzClickTimer=null;
-    },280);
-    // 新增錨點
-    bzPoints.push({
-      x:p.x,y:p.y,
-      cp1x:p.x,cp1y:p.y,
-      cp2x:p.x,cp2y:p.y,
-      hasCp:false
-    });
-    return;
-  }
-  drawing=true;
-  if(tool==='pen'){lastPenX=startX;lastPenY=startY;}
-});
-
-drawCanvas.addEventListener('mousemove',e=>{
-  const p=getPos(e);
-  bzMousePos={x:p.x,y:p.y};
-
-  if(tool==='bezier'){
-    if(bzDragging && bzPoints.length>0){
-      const last=bzPoints[bzPoints.length-1];
-      // 拖曳時設定 cp2（往反方向鏡射給 cp1）
-      last.cp2x=p.x; last.cp2y=p.y;
-      // cp1 = 錨點的鏡射
-      last.cp1x=2*last.x-p.x;
-      last.cp1y=2*last.y-p.y;
-      last.hasCp=true;
-    }
-    renderBezierPreview(p.x,p.y);
-    return;
-  }
-
-  if(!drawing) return;
-  if(tool==='pen'){
-    ctx.globalAlpha=getOpacity();
-    ctx.strokeStyle=getColor();ctx.lineWidth=getBrush();
-    ctx.lineCap='round';ctx.lineJoin='round';
-    ctx.beginPath();ctx.moveTo(lastPenX,lastPenY);ctx.lineTo(p.x,p.y);ctx.stroke();
-    ctx.globalAlpha=1;
-    lastPenX=p.x;lastPenY=p.y;
-  } else if(tool==='circle'||tool==='arrow'||tool==='fill'){
-    ctx.putImageData(snapshots[snapshots.length-1],0,0);
-    const dx=p.x-startX,dy=p.y-startY;
-    ctx.globalAlpha=getOpacity();
-    ctx.strokeStyle=getColor();ctx.lineWidth=getBrush();
-    if(tool==='circle'){
-      ctx.beginPath();
-      ctx.ellipse(startX+dx/2,startY+dy/2,Math.abs(dx/2),Math.abs(dy/2),0,0,Math.PI*2);
-      ctx.stroke();
-    } else if(tool==='arrow'){
-      drawArrow(ctx,startX,startY,p.x,p.y,getColor(),getBrush());
-    } else if(tool==='fill'){
-      ctx.fillStyle=getColor();
-      ctx.fillRect(startX,startY,dx,dy);
-    }
-    ctx.globalAlpha=1;
-  }
-});
-
-drawCanvas.addEventListener('mouseup',e=>{
-  const p=getPos(e);
-  if(tool==='bezier'){
-    bzDragging=false;
-    renderBezierPreview(p.x,p.y);
-    return;
-  }
-  if(!drawing) return;
-  drawing=false;
-  saveSnap();
-});
-
-
-
-drawCanvas.addEventListener('mouseleave',()=>{
-  if(tool==='bezier'){ bzDragging=false; renderBezierPreview(null,null); return; }
-  if(drawing&&tool==='pen'){drawing=false;saveSnap();}
-});
-
-
-
-// Touch support
-drawCanvas.addEventListener('touchstart',e=>{e.preventDefault();const t=e.touches[0];drawCanvas.dispatchEvent(new MouseEvent('mousedown',{clientX:t.clientX,clientY:t.clientY}));},{passive:false});
-drawCanvas.addEventListener('touchmove',e=>{e.preventDefault();const t=e.touches[0];drawCanvas.dispatchEvent(new MouseEvent('mousemove',{clientX:t.clientX,clientY:t.clientY}));},{passive:false});
-drawCanvas.addEventListener('touchend',e=>{drawCanvas.dispatchEvent(new MouseEvent('mouseup',{}));},{passive:false});
-
-/* ===================== 箭頭 ===================== */
-function drawArrow(c,x1,y1,x2,y2,color,lw){
-  c.strokeStyle=color;c.fillStyle=color;c.lineWidth=lw;
-  c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();
-  const angle=Math.atan2(y2-y1,x2-x1);
-  const len=14+lw;
-  c.beginPath();
-  c.moveTo(x2,y2);
-  c.lineTo(x2-len*Math.cos(angle-0.38),y2-len*Math.sin(angle-0.38));
-  c.lineTo(x2-len*Math.cos(angle+0.38),y2-len*Math.sin(angle+0.38));
-  c.closePath();c.fill();
-}
-
-/* ===================== 文字工具 ===================== */
-function showTextInput(x,y){
-  if(textInput) textInput.remove();
-  const fs=getFontSize();
-  const inp=document.createElement('input');
-  inp.type='text';inp.placeholder='輸入文字… Enter確認';
-  const dispFs=Math.round(fs*zoomLevel);
-  inp.style.cssText=`position:absolute;left:${x*zoomLevel}px;top:${y*zoomLevel-dispFs*0.6}px;font-size:${dispFs}px;color:${getColor()};background:rgba(0,0,0,0.65);border:1.5px dashed rgba(255,255,255,0.7);outline:none;padding:3px 8px;z-index:100;min-width:100px;border-radius:3px;`;
-  canvasWrap.appendChild(inp);inp.focus();textInput=inp;
-  inp.addEventListener('keydown',e=>{
-    if(e.key==='Enter'){e.preventDefault();commitText(inp,x,y,fs);}
-    if(e.key==='Escape'){inp.remove();textInput=null;}
-  });
-}
-function commitText(inp,x,y,fs){
-  const val=inp.value.trim();
-  if(val){
-    ctx.font=`${getFontWeight()} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
-    ctx.fillStyle=getColor();
-    ctx.globalAlpha=getOpacity();
-    ctx.fillText(val,x,y+fs*0.35);
-    ctx.globalAlpha=1;
-    saveSnap();
-  }
-  inp.remove();textInput=null;
-}
-
-/* ===================== 分數標注 ===================== */
-function applyFraction(){
-  if(!imgW) return;
-  const num=document.getElementById('frac-num').value;
-  const den=document.getElementById('frac-den').value;
-  const fs=parseInt(document.getElementById('frac-fs').value)||28;
-  const fw=document.getElementById('frac-fw').value;
-  ctx.font=`${fw} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
-  ctx.fillStyle='#111';
-  const nw=ctx.measureText(num).width;
-  const dw=ctx.measureText(den).width;
-  const lineW=Math.max(nw,dw)+16;
-  const lineThick=Math.max(2,Math.round(fs/16));
-  const pad=20;
-  const totalH=fs+lineThick+8+fs+4;
-  const bx=drawCanvas.width-lineW-pad;
-  const by=drawCanvas.height-totalH-pad;
-  ctx.fillText(num,bx+(lineW-nw)/2,by);
-  ctx.fillRect(bx,by+fs*0.18,lineW,lineThick);
-  ctx.fillText(den,bx+(lineW-dw)/2,by+fs*0.18+lineThick+fs+2);
-  saveSnap();
-}
-
-/* ===================== 底部備註 ===================== */
-function applyNote(){
-  if(!imgW) return;
-  const note=document.getElementById('note-text').value.trim();
-  if(!note) return;
-  const fs=parseInt(document.getElementById('note-fs').value)||22;
-  const fw=document.getElementById('note-fw').value;
-  ctx.font=`${fw} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
-  ctx.fillStyle='#e53030';
-  const pad=20;
-  const lineH=Math.round(fs*1.4);
-  const maxW=drawCanvas.width-pad*2;
-  const rawLines=note.split('\n');
-  const lines=[];
-  rawLines.forEach(raw=>{
-    const words=raw.split('');
-    let cur='';
-    words.forEach(ch=>{
-      const test=cur+ch;
-      if(ctx.measureText(test).width>maxW&&cur!==''){lines.push(cur);cur=ch;}
-      else cur=test;
-    });
-    lines.push(cur);
-  });
-  const totalH=lines.length*lineH;
-  const startY=drawCanvas.height-pad-totalH+fs;
-  lines.forEach((line,i)=>{ctx.fillText(line,pad,startY+i*lineH);});
-  saveSnap();
-}
-
-/* ===================== 裁切（控制點拖曳）===================== */
-const cropCv=document.getElementById('crop-canvas');
-const cctx=cropCv.getContext('2d');
-const cropConfirm=document.getElementById('crop-confirm');
-
-// 裁切框：canvas 座標
+/* ============================================================
+   裁切工具（控制點拖曳）
+   ============================================================ */
+const cropCv      = document.getElementById('crop-canvas');
+const cctx        = cropCv.getContext('2d');
+const cropConfirm = document.getElementById('crop-confirm');
 let cropRect={x:0,y:0,w:0,h:0};
-let cropActive=false;
-let cropDragHandle=null; // 'tl','tc','tr','ml','mr','bl','bc','br','move'
-let cropDragStart={x:0,y:0};
-let cropRectStart={x:0,y:0,w:0,h:0};
-const HANDLE_R=6; // 控制點半徑（畫面px，不受zoom影響）
+let cropActive=false, cropDragHandle=null;
+let cropDragStart={x:0,y:0}, cropRectStart={x:0,y:0,w:0,h:0};
+const HANDLE_R=6;
+let cropHistory=null;
 
 function enterCropMode(){
   if(!imgW) return;
   cropActive=true;
-  cropCv.width=drawCanvas.width;
-  cropCv.height=drawCanvas.height;
-  // 初始框 = 整張圖，留一點內縮
+  cropCv.width=drawCanvas.width; cropCv.height=drawCanvas.height;
   const pad=Math.round(Math.min(drawCanvas.width,drawCanvas.height)*0.05);
   cropRect={x:pad,y:pad,w:drawCanvas.width-pad*2,h:drawCanvas.height-pad*2};
   cropCv.style.display='block';
   drawCanvas.style.pointerEvents='none';
-  renderCropOverlay();
-  positionCropConfirm();
+  renderCropOverlay(); positionCropConfirm();
 }
-
 function exitCropMode(){
-  cropActive=false;
-  cropCv.style.display='none';
-  cropConfirm.style.display='none';
-  drawCanvas.style.pointerEvents='auto';
-  cropDragHandle=null;
+  cropActive=false; cropCv.style.display='none'; cropConfirm.style.display='none';
+  drawCanvas.style.pointerEvents='auto'; cropDragHandle=null;
 }
-
-function cancelCrop(){
-  exitCropMode();
-}
-
+function cancelCrop(){ exitCropMode(); }
 function confirmCrop(){
   const {x,y,w,h}=cropRect;
-  if(w<5||h<5){exitCropMode();return;}
+  if(w<5||h<5){ exitCropMode(); return; }
   exitCropMode();
-  // 執行裁切
-  const scaleX=imgW/drawCanvas.width;
-  const scaleY=imgH/drawCanvas.height;
-  const imgSnap=ctx.getImageData(x,y,w,h);
+  const scaleX=imgW/drawCanvas.width, scaleY=imgH/drawCanvas.height;
+  // 合成當前畫面
+  const merged=document.createElement('canvas');
+  merged.width=drawCanvas.width; merged.height=drawCanvas.height;
+  const mc=merged.getContext('2d');
+  mc.drawImage(baseImg,0,0,drawCanvas.width,drawCanvas.height);
+  mc.drawImage(drawCanvas,0,0);
+  const imgSnap=mc.getImageData(x,y,w,h);
   const tmp=document.createElement('canvas');
-  tmp.width=Math.round(w*scaleX);tmp.height=Math.round(h*scaleY);
+  tmp.width=Math.round(w*scaleX); tmp.height=Math.round(h*scaleY);
   const tc=tmp.getContext('2d');
   tc.drawImage(baseImg,x*scaleX,y*scaleY,w*scaleX,h*scaleY,0,0,tmp.width,tmp.height);
-  cropHistory={
-    imgSrc:baseImg.src,imgW,imgH,dispW,dispH,
-    drawW:drawCanvas.width,drawH:drawCanvas.height,
-    snapshots:[...snapshots.map(s=>s)]
-  };
+  cropHistory={imgSrc:baseImg.src,imgW,imgH,dispW,dispH,
+    drawW:drawCanvas.width,drawH:drawCanvas.height};
   baseImg.onload=()=>{
-    imgW=tmp.width;imgH=tmp.height;
-    dispW=w;dispH=h;
-    baseImg.style.width=w+'px';baseImg.style.height=h+'px';
-    drawCanvas.width=w;drawCanvas.height=h;
-    penCanvas.width=w;penCanvas.height=h;
-    cropCv.width=w;cropCv.height=h;
+    imgW=tmp.width; imgH=tmp.height; dispW=w; dispH=h;
+    baseImg.style.width=w+'px'; baseImg.style.height=h+'px';
+    drawCanvas.width=w; drawCanvas.height=h;
+    penCanvas.width=w; penCanvas.height=h;
+    cropCv.width=w; cropCv.height=h;
     ctx.putImageData(imgSnap,0,0);
-    snapshots=[];saveSnap();
+    objects=[]; history=[];
   };
   baseImg.src=tmp.toDataURL();
 }
 
 function getCropHandles(){
   const {x,y,w,h}=cropRect;
-  return{
-    tl:{x,y}, tc:{x:x+w/2,y}, tr:{x:x+w,y},
-    ml:{x,y:y+h/2},             mr:{x:x+w,y:y+h/2},
-    bl:{x,y:y+h}, bc:{x:x+w/2,y:y+h}, br:{x:x+w,y:y+h}
-  };
+  return{tl:{x,y},tc:{x:x+w/2,y},tr:{x:x+w,y},
+         ml:{x,y:y+h/2},mr:{x:x+w,y:y+h/2},
+         bl:{x,y:y+h},bc:{x:x+w/2,y:y+h},br:{x:x+w,y:y+h}};
 }
-
 function renderCropOverlay(){
-  const cw=cropCv.width,ch=cropCv.height;
+  const cw=cropCv.width, ch=cropCv.height;
   cctx.clearRect(0,0,cw,ch);
   const {x,y,w,h}=cropRect;
-
-  // 遮罩
-  cctx.fillStyle='rgba(0,0,0,0.5)';
-  cctx.fillRect(0,0,cw,ch);
-  cctx.clearRect(x,y,w,h);
-
-  // 框線
-  cctx.strokeStyle='#fff';
-  cctx.lineWidth=1.5/zoomLevel;
-  cctx.strokeRect(x,y,w,h);
-
-  // 三等分格線
-  cctx.strokeStyle='rgba(255,255,255,0.35)';
-  cctx.lineWidth=0.8/zoomLevel;
+  cctx.fillStyle='rgba(0,0,0,0.5)'; cctx.fillRect(0,0,cw,ch); cctx.clearRect(x,y,w,h);
+  cctx.strokeStyle='#fff'; cctx.lineWidth=1.5/zoomLevel; cctx.strokeRect(x,y,w,h);
+  cctx.strokeStyle='rgba(255,255,255,0.35)'; cctx.lineWidth=0.8/zoomLevel;
   cctx.beginPath();
-  cctx.moveTo(x+w/3,y);cctx.lineTo(x+w/3,y+h);
-  cctx.moveTo(x+w*2/3,y);cctx.lineTo(x+w*2/3,y+h);
-  cctx.moveTo(x,y+h/3);cctx.lineTo(x+w,y+h/3);
-  cctx.moveTo(x,y+h*2/3);cctx.lineTo(x+w,y+h*2/3);
+  cctx.moveTo(x+w/3,y);cctx.lineTo(x+w/3,y+h);cctx.moveTo(x+w*2/3,y);cctx.lineTo(x+w*2/3,y+h);
+  cctx.moveTo(x,y+h/3);cctx.lineTo(x+w,y+h/3);cctx.moveTo(x,y+h*2/3);cctx.lineTo(x+w,y+h*2/3);
   cctx.stroke();
-
-  // 控制點
   const hr=HANDLE_R/zoomLevel;
-  const handles=getCropHandles();
-  Object.values(handles).forEach(pt=>{
-    cctx.fillStyle='#fff';
-    cctx.strokeStyle='rgba(0,0,0,0.5)';
-    cctx.lineWidth=1/zoomLevel;
-    cctx.beginPath();cctx.arc(pt.x,pt.y,hr,0,Math.PI*2);
-    cctx.fill();cctx.stroke();
+  Object.values(getCropHandles()).forEach(pt=>{
+    cctx.fillStyle='#fff'; cctx.strokeStyle='rgba(0,0,0,0.5)'; cctx.lineWidth=1/zoomLevel;
+    cctx.beginPath(); cctx.arc(pt.x,pt.y,hr,0,Math.PI*2); cctx.fill(); cctx.stroke();
   });
 }
-
 function positionCropConfirm(){
   const {x,y,h}=cropRect;
-  const btnY=(y+h)*zoomLevel+panY+8;
-  const btnX=x*zoomLevel+panX;
   cropConfirm.style.display='flex';
-  cropConfirm.style.left=btnX+'px';
-  cropConfirm.style.top=btnY+'px';
+  cropConfirm.style.left=(x*zoomLevel+panX)+'px';
+  cropConfirm.style.top=((y+h)*zoomLevel+panY+8)+'px';
 }
-
 function hitCropHandle(px,py){
-  const hr=(HANDLE_R+3)/zoomLevel;
+  const hr=(HANDLE_R+4)/zoomLevel;
   const handles=getCropHandles();
   for(const[k,pt] of Object.entries(handles)){
-    if(Math.abs(px-pt.x)<hr && Math.abs(py-pt.y)<hr) return k;
+    if(Math.abs(px-pt.x)<hr&&Math.abs(py-pt.y)<hr) return k;
   }
-  // 框內拖曳 = move
   const {x,y,w,h}=cropRect;
   if(px>x&&px<x+w&&py>y&&py<y+h) return 'move';
   return null;
 }
-
-function getCropCursor(handle){
-  const map={tl:'nwse-resize',br:'nwse-resize',tr:'nesw-resize',bl:'nesw-resize',
-             tc:'ns-resize',bc:'ns-resize',ml:'ew-resize',mr:'ew-resize',move:'move'};
-  return map[handle]||'default';
-}
-
-// 裁切框的滑鼠事件掛在 canvas-area 上（因為 draw-canvas pointerEvents 關掉了）
-const caEl=document.getElementById('canvas-area');
+function getCropCursor(h){ return {tl:'nwse-resize',br:'nwse-resize',tr:'nesw-resize',bl:'nesw-resize',tc:'ns-resize',bc:'ns-resize',ml:'ew-resize',mr:'ew-resize',move:'move'}[h]||'default'; }
+function getCropPos(e){ const wr=canvasWrap.getBoundingClientRect(); return{x:(e.clientX-wr.left)/zoomLevel,y:(e.clientY-wr.top)/zoomLevel}; }
 
 caEl.addEventListener('mousedown',e=>{
   if(!cropActive||spaceDown) return;
   const p=getCropPos(e);
   const h=hitCropHandle(p.x,p.y);
   if(!h) return;
-  cropDragHandle=h;
-  cropDragStart={x:p.x,y:p.y};
-  cropRectStart={...cropRect};
+  cropDragHandle=h; cropDragStart={x:p.x,y:p.y}; cropRectStart={...cropRect};
   e.stopPropagation();
 });
-
 caEl.addEventListener('mousemove',e=>{
   if(!cropActive) return;
   const p=getCropPos(e);
-  if(!cropDragHandle){
-    const h=hitCropHandle(p.x,p.y);
-    cropCv.style.cursor=h?getCropCursor(h):'default';
-    return;
-  }
+  if(!cropDragHandle){ const h=hitCropHandle(p.x,p.y); cropCv.style.cursor=h?getCropCursor(h):'default'; return; }
   const dx=p.x-cropDragStart.x, dy=p.y-cropDragStart.y;
-  let {x,y,w,h: rh}=cropRectStart;
-  const minS=20/zoomLevel;
-  const maxW=drawCanvas.width, maxH=drawCanvas.height;
-
-  if(cropDragHandle==='move'){
-    x=Math.max(0,Math.min(maxW-w, x+dx));
-    y=Math.max(0,Math.min(maxH-rh, y+dy));
-  } else {
+  let {x,y,w,h:rh}=cropRectStart;
+  const minS=20/zoomLevel, maxW=drawCanvas.width, maxH=drawCanvas.height;
+  if(cropDragHandle==='move'){ x=Math.max(0,Math.min(maxW-w,x+dx)); y=Math.max(0,Math.min(maxH-rh,y+dy)); }
+  else{
     if(cropDragHandle.includes('l')){ const nx=Math.min(x+w-minS,x+dx); w=w-(nx-x); x=nx; }
     if(cropDragHandle.includes('r')){ w=Math.max(minS,w+dx); }
     if(cropDragHandle.includes('t')){ const ny=Math.min(y+rh-minS,y+dy); rh=rh-(ny-y); y=ny; }
     if(cropDragHandle.includes('b')){ rh=Math.max(minS,rh+dy); }
-    // 邊界限制
     if(x<0){w+=x;x=0;} if(y<0){rh+=y;y=0;}
-    if(x+w>maxW) w=maxW-x;
-    if(y+rh>maxH) rh=maxH-y;
+    if(x+w>maxW) w=maxW-x; if(y+rh>maxH) rh=maxH-y;
   }
-  cropRect={x,y,w,h:rh};
-  renderCropOverlay();
-  positionCropConfirm();
+  cropRect={x,y,w,h:rh}; renderCropOverlay(); positionCropConfirm();
 });
-
 caEl.addEventListener('mouseup',()=>{ cropDragHandle=null; });
 
-function getCropPos(e){
-  const wr=canvasWrap.getBoundingClientRect();
-  return{
-    x:(e.clientX-wr.left)/zoomLevel,
-    y:(e.clientY-wr.top)/zoomLevel
-  };
+/* ============================================================
+   分數 & 備註（存為可移動物件）
+   ============================================================ */
+function applyFraction(){
+  if(!imgW) return;
+  const num=document.getElementById('frac-num').value;
+  const den=document.getElementById('frac-den').value;
+  const fs=parseInt(document.getElementById('frac-fs').value)||60;
+  const fw=document.getElementById('frac-fw').value;
+  ctx.font=`${fw} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
+  const nw=ctx.measureText(num).width, dw=ctx.measureText(den).width;
+  const lineW=Math.max(nw,dw)+16;
+  const pad=20;
+  const x=drawCanvas.width-lineW-pad;
+  const y=drawCanvas.height-(fs*2+fs*0.18+10)-pad;
+  const h=fs*2+fs*0.18+10;
+  saveHistory();
+  objects.push({id:newId(),type:'fraction',num,den,fs,fw,x,y,w:lineW,h});
+  renderAll();
 }
 
-/* ===================== 匯出 ===================== */
+function applyNote(){
+  if(!imgW) return;
+  const note=document.getElementById('note-text').value.trim();
+  if(!note) return;
+  const fs=parseInt(document.getElementById('note-fs').value)||40;
+  const fw=document.getElementById('note-fw').value;
+  const pad=20;
+  const x=pad, y=drawCanvas.height-pad-fs*0.3;
+  saveHistory();
+  objects.push({id:newId(),type:'note',note,fs,fw,x,y,w:drawCanvas.width-pad*2,h:fs*1.5});
+  renderAll();
+}
+
+/* 覆寫 renderObject 支援 fraction / note */
+const _origRenderObject=renderObject;
+function renderObject(o, isPreview){
+  if(o.type==='fraction'){
+    const {num,den,fs,fw,x,y,w} = o;
+    const lineThick=Math.max(2,Math.round(fs/16));
+    ctx.save();
+    ctx.font=`${fw} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
+    ctx.fillStyle='#111';
+    const nw=ctx.measureText(num).width, dw=ctx.measureText(den).width;
+    ctx.fillText(num, x+(w-nw)/2, y+fs);
+    ctx.fillRect(x, y+fs+fs*0.18, w, lineThick);
+    ctx.fillText(den, x+(w-dw)/2, y+fs+fs*0.18+lineThick+fs+2);
+    ctx.restore(); return;
+  }
+  if(o.type==='note'){
+    const {note,fs,fw,x,y,w} = o;
+    ctx.save();
+    ctx.font=`${fw} ${fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
+    ctx.fillStyle='#e53030';
+    const pad=20;
+    const maxW=w, lineH=Math.round(fs*1.4);
+    const rawLines=note.split('\n'); const lines=[];
+    rawLines.forEach(raw=>{
+      const chars=raw.split(''); let cur='';
+      chars.forEach(ch=>{ const test=cur+ch; if(ctx.measureText(test).width>maxW&&cur!==''){lines.push(cur);cur=ch;}else cur=test; });
+      lines.push(cur);
+    });
+    lines.forEach((line,i)=>{ ctx.fillText(line, x, y+i*lineH); });
+    ctx.restore(); return;
+  }
+  // 其他類型走原本邏輯
+  ctx.save();
+  ctx.globalAlpha = o.opacity ?? 1;
+  if(o.type==='stroke'){ ctx.putImageData(o.imageData,0,0); ctx.restore(); return; }
+  if(o.type==='circle'){
+    ctx.strokeStyle=o.color; ctx.lineWidth=o.lw;
+    ctx.beginPath(); ctx.ellipse(o.cx,o.cy,o.rx,o.ry,0,0,Math.PI*2); ctx.stroke();
+  }
+  if(o.type==='arrow') drawArrowShape(ctx,o.x1,o.y1,o.x2,o.y2,o.color,o.lw);
+  if(o.type==='fill'){ ctx.fillStyle=o.color; ctx.fillRect(o.x,o.y,o.w,o.h); }
+  if(o.type==='text'){
+    ctx.font=`${o.fw} ${o.fs}px 'PingFang TC','Microsoft JhengHei',sans-serif`;
+    ctx.fillStyle=o.color; ctx.fillText(o.text,o.x,o.y);
+  }
+  if(o.type==='bezier'){
+    ctx.strokeStyle=o.color; ctx.lineWidth=o.lw; ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.beginPath(); ctx.moveTo(o.pts[0].x,o.pts[0].y);
+    for(let i=1;i<o.pts.length;i++){
+      const prev=o.pts[i-1],cur=o.pts[i];
+      ctx.bezierCurveTo(prev.cp2x,prev.cp2y,cur.cp1x,cur.cp1y,cur.x,cur.y);
+    }
+    const last=o.pts[o.pts.length-1],first=o.pts[0];
+    ctx.bezierCurveTo(last.cp2x,last.cp2y,first.cp1x,first.cp1y,first.x,first.y);
+    ctx.closePath(); if(o.fill){ctx.fillStyle=o.color;ctx.fill();} ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ============================================================
+   匯出
+   ============================================================ */
 function exportImg(){
   if(!imgW) return;
   const sizeMode=document.getElementById('export-size').value;
-
-  // 目標像素：依 ppi 計算（框框 7cm 高 × 6cm 寬）
-  // 1 inch = 2.54 cm
-  let targetW, targetH;
-  if(sizeMode==='standard'){
-    // Excel 顯示用 96 ppi：6cm×96/2.54 ≈ 227px 寬，7cm×96/2.54 ≈ 265px 高
-    const ppi=96;
-    targetW=Math.round(6/2.54*ppi);  // 227
-    targetH=Math.round(7/2.54*ppi);  // 265
-  } else if(sizeMode==='large'){
-    // 2倍解析度（Retina / 列印清晰）：192 ppi
-    const ppi=192;
-    targetW=Math.round(6/2.54*ppi);  // 453
-    targetH=Math.round(7/2.54*ppi);  // 529
-  } else {
-    // 原始尺寸
-    targetW=imgW; targetH=imgH;
-  }
-
-  // 維持原始長寬比，縮放到 target 範圍內
-  const srcW=drawCanvas.width, srcH=drawCanvas.height;
-  const ratio=Math.min(targetW/srcW, targetH/srcH);
-  // 原始尺寸模式直接用 imgW/imgH，其他才縮放
-  const outW = sizeMode==='original' ? imgW : Math.round(srcW*ratio);
-  const outH = sizeMode==='original' ? imgH : Math.round(srcH*ratio);
-
+  let targetW,targetH;
+  if(sizeMode==='standard'){ const ppi=150; targetW=Math.round(6/2.54*ppi); targetH=Math.round(7/2.54*ppi); }
+  else if(sizeMode==='large'){ const ppi=300; targetW=Math.round(6/2.54*ppi); targetH=Math.round(7/2.54*ppi); }
+  else { targetW=imgW; targetH=imgH; }
+  const srcW=drawCanvas.width,srcH=drawCanvas.height;
+  const ratio=Math.min(targetW/srcW,targetH/srcH);
+  const outW=sizeMode==='original'?imgW:Math.round(srcW*ratio);
+  const outH=sizeMode==='original'?imgH:Math.round(srcH*ratio);
   const out=document.createElement('canvas');
   out.width=outW; out.height=outH;
   const oc=out.getContext('2d');
   oc.drawImage(baseImg,0,0,outW,outH);
   oc.drawImage(drawCanvas,0,0,outW,outH);
-
   const link=document.createElement('a');
   link.download='qc_annotated.jpg';
   link.href=out.toDataURL('image/jpeg',0.92);
